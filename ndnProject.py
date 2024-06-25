@@ -6,7 +6,9 @@ import matplotlib
 import seaborn
 import logging
 import statistics
+import pylint
 logging.basicConfig(level = logging.DEBUG)
+PROB = 0.5
 names = ["books", "books/fiction", "books/nonfiction", "books/fiction/historical-fiction", "books/fiction/fantasy", "books/fiction/adventure", "books/fiction/mystery", "books/nonfiction/encyclopedia", "books/nonfiction/memoir", "books/nonfiction/science", "books/nonfiction/travel", "books/nonfiction/travel/france", "books/nonfiction/science/quantam-mechanics", "books/nonfiction/memoir/i-am-malala", "books/nonfiction/encyclopedia/britannica", "books/fiction/historical-fiction/world-war-2", "books/fiction/fantasy/harry-potter", "books/fiction/adventure/treasure-island", "books/fiction/mystery/nancy-drew"]
 class ContentStore(object):
     def __init__(self, env, max, storeList, p):
@@ -29,9 +31,9 @@ class ContentStore(object):
         else:
             logging.info("Did not cache %s in Content Store", dataName)
         logging.info("Current state of Content Store: %s", self.content)
-    def respondWithData(self, channelId, dataName):
-        logging.info("Responding with data: %s to channel %s", dataName, channelId)
-        yield self.env.process(channels[channelId].forwardData(dataName))
+    def respondWithData(self, channelId, interest):
+        logging.info("Responding with data: %s to channel %s", interest.dataName, channelId)
+        yield self.env.process(channels[channelId].forwardData(interest.dataName, interest))
 class PendingInterest(object):
     def __init__(self, env, max):
         self.env = env
@@ -44,10 +46,10 @@ class PendingInterest(object):
         logging.info("Data: %s not found in Pending Interest Table", interest.dataName)
         return False
     def addName(self, interest, fromId):
-        self.content[interest.dataName] = [fromId]
+        self.content[interest.dataName] = {interest: fromId}
         logging.info("Data: %s added to Pending Interest Table", interest.dataName)
     def addInterface(self, interest, fromId):
-        self.content[interest.dataName].append(fromId)
+        self.content[interest.dataName][interest] = fromId
         logging.info("Interface: %s added to %s in Pending Interest Table", fromId, interest.dataName)
     def removeName(self, dataName):
         self.content.pop(dataName)
@@ -76,12 +78,16 @@ class Channel(object):
         self.toNodeId = toNode
     def forwardRequest(self, interest):
         if self.toNodeId != -1:
-            #yield env.timeout(?)
+            yield env.timeout(5)
             logging.info("Channel %s forwarding request for %s to %s", self.id, interest.dataName, self.toNodeId)
             nodes[self.toNodeId].stores[self.id].put(interest)
 
-    def forwardData(self, dataName):
-        #yield env.timeout(?)
+    def forwardData(self, dataName, intrst):
+        yield env.timeout(5)
+        if self.fromNodeId == -1:
+            logging.info("Returning data: %s to user", dataName)
+            travelTime = self.env.now - intrst.creationTime
+            logging.info("...took %s units", travelTime)
         if self.fromNodeId != -1:
             logging.info("Channel %s forwarding %s to %s", self.id, dataName, self.fromNodeId)
             yield self.env.process(nodes[self.toNodeId].receiveData(dataName))
@@ -106,6 +112,8 @@ class Node(object):
         self.contentStore = ContentStore(self.env, csSize, csContents, p)
         self.pendingInterest = PendingInterest(self.env, piSize)
         self.forwardingBase = ForwardingBase(self.env, fbSize, fbData)
+        self.cacheHits = 0
+        self.totalHits = 0
     def searchInfo(self):
         while True:
             for x in self.stores:
@@ -113,9 +121,12 @@ class Node(object):
                 yield self.env.process(self.receiveInfo(intrst, x))
     def receiveInfo(self, interest, fromChannelId):
         logging.info("Node %s receiving request for %s", self.id, interest.dataName)
+        self.totalHits += 1
+        hitDistances[interest.id] += 1
         if self.contentStore.searchName(interest):
             logging.info("Going to respond with data...")
-            yield self.env.process(self.contentStore.respondWithData(fromChannelId, interest.dataName))
+            self.cacheHits += 1
+            yield self.env.process(self.contentStore.respondWithData(fromChannelId, interest))
         elif self.pendingInterest.searchName(interest):
             self.pendingInterest.addInterface(interest, fromChannelId)
         else:
@@ -126,21 +137,27 @@ class Node(object):
     def receiveData(self, dataName):
         logging.info("Node %s receiving data: %s", self.id, dataName)
         self.forwardingBase.dropRequest(dataName)
-        channelIds = self.pendingInterest[dataName]
+        intrsts = []
+        channelIds = []
+        for x in self.pendingInterest[dataName]:
+            intrsts.append(x)
+            channelIds.append(self.pendingInterest[dataName][x])
         self.pendingInterest.removeName(dataName)
         self.contentStore.cacheData(dataName)
-        for x in channelIds:
-            yield self.env.process(channels[x].forwardData(dataName))
+        for x in range(len(intrsts)):
+            yield self.env.process(channels[channelIds[x]].forwardData(dataName, intrsts[x]))
 def interest_arrival(env, channels):
     interestId = 0
     while True:
         yield env.timeout(random.expovariate(1.0 / 5))  # Interest arrival follows an exponential distribution
         interest = Interest(env, interestId, names[random.randint(0, len(names))-1])
+        hitDistances.append(0)
         logging.info("About to send request for %s", interest.dataName)
-        channels[0].forwardRequest(interest)
+        yield env.process(channels[0].forwardRequest(interest))
         interestId += 1
 env = simpy.Environment()
-node = Node(env, 0, [0], [1], 4, 5, 5, [], 1)
+hitDistances = []
+node = Node(env, 0, [0], [1], 4, 5, 5, [], PROB)
 nodes = [node]
 channel1 = Channel(env, 0, -1, 0)
 channel2 = Channel(env, 1, 0, -1)
@@ -148,4 +165,9 @@ channels = [channel1, channel2]
 env.process(interest_arrival(env, channels))
 for n in nodes:
     env.process(n.searchInfo())
-env.run(until=400)
+env.run(until=2000)
+total = 0
+for n in nodes:
+    total += n.cacheHits/n.totalHits
+logging.info("Average cache hit ratio: %s", total/len(nodes))
+logging.info("Average hit distance: %s", statistics.mean(hitDistances))

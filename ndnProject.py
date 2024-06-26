@@ -10,6 +10,9 @@ import pylint
 logging.basicConfig(level = logging.DEBUG)
 PROB = 0.5
 names = ["books", "books/fiction", "books/nonfiction", "books/fiction/historical-fiction", "books/fiction/fantasy", "books/fiction/adventure", "books/fiction/mystery", "books/nonfiction/encyclopedia", "books/nonfiction/memoir", "books/nonfiction/science", "books/nonfiction/travel", "books/nonfiction/travel/france", "books/nonfiction/science/quantam-mechanics", "books/nonfiction/memoir/i-am-malala", "books/nonfiction/encyclopedia/britannica", "books/fiction/historical-fiction/world-war-2", "books/fiction/fantasy/harry-potter", "books/fiction/adventure/treasure-island", "books/fiction/mystery/nancy-drew"]
+cacheStatus = {}
+for x in names:
+    cacheStatus[x] = 0
 class ContentStore(object):
     def __init__(self, env, max, storeList, p):
         self.env = env
@@ -25,8 +28,10 @@ class ContentStore(object):
     def cacheData(self, dataName):
         numb = random.random()
         if numb < self.prob:
+            cacheStatus[dataName] += 1
             self.content.insert(0, dataName)
-            self.pop(len(self.content) - 1)
+            cacheStatus[self.content[len(self.content)-1]] -= 1
+            self.content.pop(len(self.content) - 1)
             logging.info("Cached %s in Content Store", dataName)
         else:
             logging.info("Did not cache %s in Content Store", dataName)
@@ -62,10 +67,10 @@ class ForwardingBase(object):
         self.interfaceData = interfaces
     def sendRequest(self, interest):
         logging.info("Sending request for %s to Forwarding Interest Base", interest.dataName)
-        channels[self.content[interest.dataName]].forwardRequest(interest)
+        yield self.env.process(channels[self.content[interest.dataName]].forwardRequest(interest))
     def addRequest(self, interest, pChannels):
         #just placeholder for now will have to figure out how to decide which channel to go to
-        self.content[interest.dataName] = 0
+        self.content[interest.dataName] = 1
         logging.info("Added request for %s to Forwarding Interest Base", interest.dataName)
     def dropRequest(self, dataName):
         self.content.pop(dataName)
@@ -88,9 +93,9 @@ class Channel(object):
             logging.info("Returning data: %s to user", dataName)
             travelTime = self.env.now - intrst.creationTime
             logging.info("...took %s units", travelTime)
-        if self.fromNodeId != -1:
+        else:
             logging.info("Channel %s forwarding %s to %s", self.id, dataName, self.fromNodeId)
-            yield self.env.process(nodes[self.toNodeId].receiveData(dataName))
+            nodes[self.fromNodeId].dataStore.put(dataName)
 class Interest(object):
     def __init__(self, env, id, name):
         self.env = env
@@ -103,23 +108,29 @@ class Node(object):
         self.env = env
         self.id = id
         self.stores = {}
+        self.dataStore = simpy.Store(env)
         for x in fromChannelIds:
             self.stores[x] = simpy.Store(env)
         self.toChannelIds = toChannels
         csContents = []
         for i in range(csSize):
             csContents.append(names[i])
+            cacheStatus[names[i]] += 1
         self.contentStore = ContentStore(self.env, csSize, csContents, p)
         self.pendingInterest = PendingInterest(self.env, piSize)
         self.forwardingBase = ForwardingBase(self.env, fbSize, fbData)
         self.cacheHits = 0
         self.totalHits = 0
-    def searchInfo(self):
+    def searchRequest(self):
         while True:
             for x in self.stores:
                 intrst = yield self.stores[x].get()
-                yield self.env.process(self.receiveInfo(intrst, x))
-    def receiveInfo(self, interest, fromChannelId):
+                yield self.env.process(self.receiveRequest(intrst, x))
+    def searchData(self):
+        while True:
+            data = yield self.dataStore.get()
+            yield self.env.process(self.receiveData(data))
+    def receiveRequest(self, interest, fromChannelId):
         logging.info("Node %s receiving request for %s", self.id, interest.dataName)
         self.totalHits += 1
         hitDistances[interest.id] += 1
@@ -132,20 +143,40 @@ class Node(object):
         else:
             self.forwardingBase.addRequest(interest, self.toChannelIds)
             self.pendingInterest.addName(interest, fromChannelId)
-            self.forwardingBase.sendRequest(interest)
-        yield self.env.process(self.searchInfo())
+            yield self.env.process(self.forwardingBase.sendRequest(interest))
+        yield self.env.process(self.searchRequest())
     def receiveData(self, dataName):
         logging.info("Node %s receiving data: %s", self.id, dataName)
         self.forwardingBase.dropRequest(dataName)
         intrsts = []
         channelIds = []
-        for x in self.pendingInterest[dataName]:
+        for x in self.pendingInterest.content[dataName]:
             intrsts.append(x)
-            channelIds.append(self.pendingInterest[dataName][x])
+            channelIds.append(self.pendingInterest.content[dataName][x])
         self.pendingInterest.removeName(dataName)
         self.contentStore.cacheData(dataName)
         for x in range(len(intrsts)):
             yield self.env.process(channels[channelIds[x]].forwardData(dataName, intrsts[x]))
+class DataProducer(object):
+    def __init__(self, env, id, name, fromChannelIds, content):
+        self.env = env
+        self.id = id
+        self.name = name
+        self.fromChannelIds = fromChannelIds
+        self.content = content
+        self.stores = {}
+        for x in fromChannelIds:
+            self.stores[x] = simpy.Store(env)
+    def searchRequest(self):
+        while True:
+            for x in self.stores:
+                intrst = yield self.stores[x].get()
+                yield self.env.process(self.receiveRequest(intrst, x))
+    def receiveRequest(self, interest, fromChannelId):
+        logging.info("Data producer has received request")
+        hitDistances[interest.id] += 1
+        yield self.env.process(channels[fromChannelId].forwardData(interest.dataName, interest))
+    
 def interest_arrival(env, channels):
     interestId = 0
     while True:
@@ -159,15 +190,20 @@ env = simpy.Environment()
 hitDistances = []
 node = Node(env, 0, [0], [1], 4, 5, 5, [], PROB)
 nodes = [node]
+dProducer = DataProducer(env, 1, "Books", [1], names)
+nodes.append(dProducer)
 channel1 = Channel(env, 0, -1, 0)
-channel2 = Channel(env, 1, 0, -1)
+channel2 = Channel(env, 1, 0, 1)
 channels = [channel1, channel2]
 env.process(interest_arrival(env, channels))
 for n in nodes:
-    env.process(n.searchInfo())
-env.run(until=2000)
+    env.process(n.searchRequest())
+    if type(n) == Node:
+        env.process(n.searchData())
+env.run(until=400)
 total = 0
 for n in nodes:
-    total += n.cacheHits/n.totalHits
+    if type(n) == Node:
+        total += n.cacheHits/n.totalHits
 logging.info("Average cache hit ratio: %s", total/len(nodes))
 logging.info("Average hit distance: %s", statistics.mean(hitDistances))

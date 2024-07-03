@@ -8,16 +8,17 @@ import seaborn
 import logging
 import statistics
 import pylint
-logging.basicConfig(level = logging.INFO)
+import ndnProjectNetwork
+logging.basicConfig(filename = "ndnProject.log", level = logging.INFO)
 PROB = 1
 CACHE_SIZE = 6
-global dataId
-dataId = 0
-names = ["books", "books/fiction", "books/nonfiction", "books/fiction/historical-fiction", "books/fiction/fantasy", "books/fiction/adventure", "books/fiction/mystery", "books/nonfiction/encyclopedia", "books/nonfiction/memoir", "books/nonfiction/science", "books/nonfiction/travel", "books/nonfiction/travel/france", "books/nonfiction/science/quantam-mechanics", "books/nonfiction/memoir/i-am-malala", "books/nonfiction/encyclopedia/britannica", "books/fiction/historical-fiction/world-war-2", "books/fiction/fantasy/harry-potter", "books/fiction/adventure/treasure-island", "books/fiction/mystery/nancy-drew"]
+names = ["autonomous_ship", "autonomous_ship/health_info", "autonomous_ship/mission_info", "autonomous_ship/mission_info/mission_description", "autonomous_ship/mission_info/route", "autonomous_ship/mission_info/antennas", "autonomous_ship/mission_info/antennas/antenna1", "autonomous_ship/mission_info/antennas/antenna2", "autonomous_ship/mission_info/antennas/antenna3", "autonomous_ship/details", "autonomous_ship/details/dimensions", "autonomous_ship/details/name", "autonomous_ship/details/model", "autonomous_ship/details/weight", "autonomous_ship/log"]
 cacheStatus = {}
 G = nx.Graph()
 for x in names:
     cacheStatus[x] = 0
+hits = []
+times = []
 class ContentStore(object):
     def __init__(self, env, max, storeList, p):
         self.env = env
@@ -42,10 +43,10 @@ class ContentStore(object):
         else:
             logging.info("Did not cache %s in Content Store", dataName)
         logging.info("Current state of Content Store: %s", self.content)
-    def respondWithData(self, channelId, interest):
+    def respondWithData(self, channelId, interest, nodeId):
         data = Data(self.env, interest.id, interest.dataName)
         logging.info("Responding with data: %s to channel %s", interest.dataName, channelId)
-        yield self.env.process(channels[channelId].forwardData(data, interest))
+        yield self.env.process(channels[channelId].forwardData(data, interest, nodeId))
 class PendingInterest(object):
     def __init__(self, env, max):
         self.env = env
@@ -67,35 +68,43 @@ class PendingInterest(object):
         self.content.pop(dataName)
         logging.info("Data: %s removed from Pending Interest Table", dataName)
 class ForwardingBase(object):
-    def __init__(self, env, max, interfaces, toChannels):
+    def __init__(self, env, max, interfaces):
         self.env = env
         self.maxSize = max
         self.content = interfaces
-        self.next = toChannels[0]
-    def sendRequest(self, interest):
-        logging.info("Sending request for %s to Channel: %s", interest.dataName, self.next)
-        yield self.env.process(channels[self.next].forwardRequest(interest))
+    def sendRequest(self, interest, nodeId):
+        logging.info("Sending request for %s to Channel: %s", interest.dataName, self.content[interest.dataName])
+        yield self.env.process(channels[self.content[interest.dataName]].forwardRequest(interest, nodeId))
 class Channel(object):
     def __init__(self, env, id, fromNode, toNode, capacity=simpy.core.Infinity):
         self.env = env
         self.id = id
-        self.fromNodeId = fromNode
-        self.toNodeId = toNode
-    def forwardRequest(self, interest):
-        if self.toNodeId != -1:
-            yield env.timeout(5)
-            logging.info("Channel %s forwarding request for %s to %s", self.id, interest.dataName, self.toNodeId)
-            nodes[self.toNodeId].stores[self.id].put(interest)
-
-    def forwardData(self, d, intrst):
-        yield env.timeout(5)
-        if self.fromNodeId == -1:
+        self.nodes = [fromNode, toNode]
+    def forwardRequest(self, interest, nodeId):
+        yield self.env.timeout(5)
+        if self.nodes[0] == nodeId:
+            rNodeId = self.nodes[1]
+        else:
+            rNodeId = self.nodes[0]
+        if rNodeId != -1:
+            logging.info("Channel %s forwarding request for %s to %s", self.id, interest.dataName, rNodeId)
+            nodes[rNodeId].stores[self.id].put(interest)
+            yield self.env.process(nodes[rNodeId].searchRequest())
+    def forwardData(self, d, intrst, nodeId):
+        yield self.env.timeout(5)
+        if self.nodes[0] == nodeId:
+            rNodeId = self.nodes[1]
+        else:
+            rNodeId = self.nodes[0]
+        if rNodeId == -1:
             logging.info("Returning data: %s to user", d.name)
             travelTime = self.env.now - intrst.creationTime
             logging.info("...took %s units", travelTime)
+            yield self.env.process(interest_arrival(env, channels))
         else:
-            logging.info("Channel %s forwarding %s to %s", self.id, d.name, self.fromNodeId)
-            nodes[self.fromNodeId].dataStore.put(d)
+            logging.info("Channel %s forwarding %s to %s", self.id, d.name, rNodeId)
+            nodes[rNodeId].dataStore.put(d)
+            yield self.env.process(nodes[rNodeId].searchData())
 class Interest(object):
     def __init__(self, env, id, name):
         self.env = env
@@ -109,28 +118,34 @@ class Data(object):
         self.id = id
         self.name = name
 class Node(object):
-    def __init__(self, env, id, fromChannelIds, toChannels, csSize, piSize, fbSize, fbData, p):
+    def __init__(self, env, id, fromChannelIds, csSize, piSize, fbSize, fbData, p):
         self.env = env
         self.id = id
         self.stores = {}
         self.dataStore = simpy.Store(env)
+        self.fromChannelIds = fromChannelIds
         for x in fromChannelIds:
+            logging.info("%s, %s", self.id, x)
             self.stores[x] = simpy.Store(env)
-        self.toChannelIds = toChannels
         csContents = []
         self.contentStore = ContentStore(self.env, csSize, csContents, p)
         self.pendingInterest = PendingInterest(self.env, piSize)
-        self.data = fbData
-        for x in self.data:
-            self.data[x] = self.toChannelIds[0]
-        self.forwardingBase = ForwardingBase(self.env, fbSize, fbData, toChannels)
+        self.forwardingBase = ForwardingBase(self.env, fbSize, fbData)
         self.cacheHits = 0
         self.totalHits = 0
     def searchRequest(self):
         while True:
+            count = 0
             for x in self.stores:
-                intrst = yield self.stores[x].get()
-                yield self.env.process(self.receiveRequest(intrst, x))
+                logging.info("Node %s CHECKING %s", self.id, x)
+                if count == len(self.stores)-1:
+                    intrst = yield self.stores[x].get()
+                    yield self.env.process(self.receiveRequest(intrst, x))
+                else:
+                    if len(self.stores[x].items) > 0:
+                        intrst = yield self.stores[x].get()
+                        yield self.env.process(self.receiveRequest(intrst, x))
+                    count += 1
     def searchData(self):
         while True:
             data = yield self.dataStore.get()
@@ -142,13 +157,14 @@ class Node(object):
         if self.contentStore.searchName(interest):
             logging.info("Going to respond with data...")
             self.cacheHits += 1
-            yield self.env.process(self.contentStore.respondWithData(fromChannelId, interest))
+            hits.append(1)
+            times.append(self.env.now)
+            yield self.env.process(self.contentStore.respondWithData(fromChannelId, interest, self.id))
         elif self.pendingInterest.searchName(interest):
             self.pendingInterest.addInterface(interest, fromChannelId)
         else:
             self.pendingInterest.addName(interest, fromChannelId)
-            yield self.env.process(self.forwardingBase.sendRequest(interest))
-        yield self.env.process(self.searchRequest())
+            yield self.env.process(self.forwardingBase.sendRequest(interest, self.id))
     def receiveData(self, data):
         logging.info("Node %s receiving data: %s", self.id, data.name)
         intrsts = []
@@ -159,7 +175,8 @@ class Node(object):
         self.pendingInterest.removeName(data.name)
         self.contentStore.cacheData(data.name)
         for x in range(len(intrsts)):
-            yield self.env.process(channels[channelIds[x]].forwardData(data, intrsts[x]))
+            yield self.env.process(channels[channelIds[x]].forwardData(data, intrsts[x], self.id))
+        yield self.env.process(interest_arrival(env, channels))
 class DataProducer(object):
     def __init__(self, env, id, name, fromChannelIds, content):
         self.env = env
@@ -172,14 +189,23 @@ class DataProducer(object):
             self.stores[x] = simpy.Store(env)
     def searchRequest(self):
         while True:
+            count = 0
             for x in self.stores:
-                intrst = yield self.stores[x].get()
-                yield self.env.process(self.receiveRequest(intrst, x))
+                logging.info("Node %s CHECKING %s", self.id, x)
+                if count == len(self.stores)-1:
+                    logging.info("LAST")
+                    intrst = yield self.stores[x].get()
+                    yield self.env.process(self.receiveRequest(intrst, x))
+                else:
+                    if len(self.stores[x].items) > 0:
+                        intrst = yield self.stores[x].get()
+                        yield self.env.process(self.receiveRequest(intrst, x))
+                    count += 1
     def receiveRequest(self, interest, fromChannelId):
         logging.info("Data producer has received request")
         data = Data(self.env, interest.id, interest.dataName)
         hitDistances[interest.id] += 1
-        yield self.env.process(channels[fromChannelId].forwardData(data, interest))
+        yield self.env.process(channels[fromChannelId].forwardData(data, interest, self.id))
     
 def interest_arrival(env, channels):
     interestId = 0
@@ -187,66 +213,95 @@ def interest_arrival(env, channels):
     # interest = Interest(env, interestId, name)
     # hitDistances.append(0)
     # logging.info("About to send request for %s", interest.dataName)
-    # yield env.process(channels[0].forwardRequest(interest))
-    # yield env.timeout(2)
+    # yield env.process(channels[0].forwardRequest(interest, -1))
+    # yield env.timeout(20)
     # interestId = 1
     # interest = Interest(env, interestId, name)
     # hitDistances.append(0)
     # logging.info("About to send request for %s", interest.dataName)
-    # yield env.process(channels[0].forwardRequest(interest))
+    # yield env.process(channels[0].forwardRequest(interest, -1))
     while True:
         yield env.timeout(random.expovariate(1.0 / 5))  # Interest arrival follows an exponential distribution
         interest = Interest(env, interestId, names[random.randint(0, len(names))-1])
         hitDistances.append(0)
         logging.info("About to send request for %s", interest.dataName)
         cIds = [0, 4, 8]
-        yield env.process(channels[random.choice(cIds)].forwardRequest(interest))
+        yield env.process(channels[random.choice(cIds)].forwardRequest(interest, -1))
         interestId += 1
 env = simpy.Environment()
 hitDistances = []
 nodes = []
 channels = []
 content = []
-format = {}
+content1 = {}
 for n in names:
-    format[n] = 0
-for i in range(0, 10):
-    content.append(format)
-for i in range(0, 3):
-    for x in names:
-        content[i][x] = i+1
-    print(content)
-    nodes.append(Node(env, i, [i], [i+1], CACHE_SIZE, 5, 5, content[i], PROB))
-    channels.append(Channel(env, i, i-1, i))
-channels.append(Channel(env, 3, 2, 9))
-channels.append(Channel(env, 4, -1, 3))
-channels.append(Channel(env, 5, 3, 4))
-channels.append(Channel(env, 6, 4, 5))
-channels.append(Channel(env, 7, 5, 9))
-for i in range(3, 6):
-    for x in names:
-        content[i][x] = i+2
-    nodes.append(Node(env, i, [i+1], [i+2], CACHE_SIZE, 5, 5, content[i], PROB))
-channels.append(Channel(env, 8, -1, 6))
-for i in range(6, 9):
-    for x in names:
-        content[i][x] = i+3
-    nodes.append(Node(env, i, [i+2], [i+3], CACHE_SIZE, 5, 5, content[i], PROB))
-    channels.append(Channel(env, i+3, i, i+1))
-dProducer = DataProducer(env, 9, "Books", [3, 7, 11], names)
-nodes.append(dProducer)
-G.add_nodes_from(nodes)
-elist = []
+    content1[n] = 1
+content.append(content1)
+content2 = {}
+for n in names:
+    content2[n] = 2
+content.append(content2)
+content3 = {}
+for n in names:
+    content3[n] = 3
+content.append(content3)
+content4 = {}
+for n in names:
+    content4[n] = 5
+content.append(content4)
+content5 = {}
+for n in names:
+    content5[n] = 6
+content.append(content5)
+content6 = {}
+for n in names:
+    content6[n] = 7
+content.append(content6)
+content7 = {}
+for n in names:
+    content7[n] = 9
+content.append(content7)
+content8 = {}
+for n in names:
+    content8[n] = 10
+content.append(content8)
+content9 = {}
+for n in names:
+    content9[n] = 11
+content.append(content9)
+results = ndnProjectNetwork.graphConfiguration()
+H = results["graph"]
+edgeChannels = results["edgeChannels"]
+dataProducers = results["dataProducers"]
+past = -1
+for e in H.edges:
+    for r in edgeChannels:
+        if r[0] > past and r[0] < H.edges[e]["object"]:
+            channels.append(Channel(env, r[0], -1, r[1]))
+    channels.append(Channel(env, H.edges[e]["object"], e[0], e[1]))
+    past = H.edges[e]["object"]
+for n in H.nodes:
+    chIds = []
+    for e in H.edges(n):
+        chIds.append(H.edges[e]["object"])
+    for r in edgeChannels:
+        if r[1] == n:
+            chIds.append(r[0])
+    if n in dataProducers:
+        nodes.append(DataProducer(env, n, "Ship", chIds, names))
+        break
+    nodes.append(Node(env, n, chIds, CACHE_SIZE, 5, 5, content[n], PROB))
+for n in nodes:
+    logging.info(n.fromChannelIds)
 for c in channels:
-    if c.id != 0 and c.id != 4 and c.id != 8:
-        G.add_edge(nodes[c.fromNodeId], nodes[c.toNodeId], object = c)
-        elist.append((nodes[c.fromNodeId], nodes[c.toNodeId]))
+    logging.info(c.nodes)
 env.process(interest_arrival(env, channels))
 for n in nodes:
     env.process(n.searchRequest())
     if type(n) == Node:
         env.process(n.searchData())
-env.run(until=400)
+env.process(nodes[0].searchRequest())
+env.run(until=4000)
 total = 0
 length = 0
 for n in nodes:
@@ -256,23 +311,13 @@ for n in nodes:
 logging.info("Average cache hit ratio: %s", total/length)
 logging.info("Average hit distance: %s", statistics.mean(hitDistances))
 center_node = nodes[9]
-edge_nodes = set(G) - {center_node}
-pos = nx.circular_layout(G.subgraph(edge_nodes))
+edge_nodes = set(H) - {center_node}
+pos = nx.circular_layout(H.subgraph(edge_nodes))
 pos[center_node] = numpy.array([0, 0])
-# nx.draw_networkx_nodes(G, pos, nodelist=nodes[0:9], node_color="tab:red")
-# nx.draw_networkx_nodes(G, pos, nodelist=nodes[9:], node_color="tab:blue")
-# fig, ax = plt.subplots()
-# nx.draw_networkx_edges(G, pos, width=1.0, alpha=0.5)
-# nx.draw_networkx_edges(
-#     G,
-#     pos=pos,
-#     ax=ax,
-#     edgelist = elist,
-#     arrows=True,
-#     arrowstyle="-",
-#     min_source_margin=15,
-#     min_target_margin=15,
-# )
-nx.draw(G)
+nx.draw(H)
 plt.draw()
+plt.show()
+plt.scatter(times, hits)
+plt.ylabel = "Cache Hits"
+plt.xlabel = "Event Time"
 plt.show()

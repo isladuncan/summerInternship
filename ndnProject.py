@@ -32,6 +32,9 @@ logger.addHandler(file_handler)
 logger.addHandler(console_handler)
 PROB = 1
 CACHE_SIZE = 6
+BANDWIDTH = 100000000
+SIGNAL_SPEED = 1500
+DELAY_VARIANCE = 0.01
 names = ["autonomous_ship", "autonomous_ship/health_info", "autonomous_ship/mission_info", "autonomous_ship/mission_info/mission_description", "autonomous_ship/mission_info/route", "autonomous_ship/mission_info/antennas", "autonomous_ship/mission_info/antennas/antenna1", "autonomous_ship/mission_info/antennas/antenna2", "autonomous_ship/mission_info/antennas/antenna3", "autonomous_ship/details", "autonomous_ship/details/dimensions", "autonomous_ship/details/name", "autonomous_ship/details/model", "autonomous_ship/details/weight", "autonomous_ship/log"]
 cacheStatus = {}
 G = nx.Graph()
@@ -96,13 +99,15 @@ class ForwardingBase(object):
         logger.info("Sending request for %s to Channel: %s", interest.dataName, self.content[interest.dataName])
         yield self.env.process(channels[self.content[interest.dataName]].forwardRequest(interest, nodeId))
 class Channel(object):
-    def __init__(self, env, id, fromNode, toNode, capacity=simpy.core.Infinity):
+    def __init__(self, env, id, fromNode, toNode, length, capacity=simpy.core.Infinity):
         self.env = env
         self.id = id
         self.nodes = [fromNode, toNode]
-        self.bandwidth = 100000000
+        self.bandwidth = BANDWIDTH
+        self.length = length
     def forwardRequest(self, interest, nodeId):
-        yield self.env.timeout(interest.size/self.bandwidth)
+        delay = self.length/SIGNAL_SPEED + interest.size/self.bandwidth + random.uniform(-DELAY_VARIANCE, DELAY_VARIANCE)
+        yield self.env.timeout(delay)
         if self.nodes[0] == nodeId:
             rNodeId = self.nodes[1]
         else:
@@ -281,14 +286,14 @@ dataProducers = results["dataProducers"]
 past = -1
 for e in H.edges:
     for r in edgeChannels:
-        if r[0] > past and r[0] < H.edges[e]["object"]:
-            channels.append(Channel(env, r[0], -1, r[1]))
-    channels.append(Channel(env, H.edges[e]["object"], e[0], e[1]))
-    past = H.edges[e]["object"]
+        if r[0] > past and r[0] < H.edges[e]["id"]:
+            channels.append(Channel(env, r[0], -1, r[1], r[2]))
+    channels.append(Channel(env, H.edges[e]["id"], e[0], e[1], H.edges[e]["length"]))
+    past = H.edges[e]["id"]
 for n in H.nodes:
     chIds = []
     for e in H.edges(n):
-        chIds.append(H.edges[e]["object"])
+        chIds.append(H.edges[e]["id"])
     for r in edgeChannels:
         if r[1] == n:
             chIds.append(r[0])

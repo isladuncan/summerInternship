@@ -1,5 +1,4 @@
 import networkx as nx
-import matplotlib.pyplot as plt
 from numpy import random
 def graphConfiguration():
     G = nx.Graph()
@@ -22,6 +21,7 @@ def graphConfiguration():
         channels.append(i+3)
     nodes.append(9)
     G.add_nodes_from(nodes)
+    #length is randomly chosen for edges
     G.add_edge(0, 1, id = 1, length = random.randint(10, 1000))
     G.add_edge(1, 2, id = 2, length = random.randint(10, 1000))
     G.add_edge(2, 9, id = 3, length = random.randint(10, 1000))
@@ -31,9 +31,12 @@ def graphConfiguration():
     G.add_edge(6, 7, id = 8, length = random.randint(10, 1000))
     G.add_edge(7, 8, id = 9, length = random.randint(10, 1000))
     G.add_edge(8, 9, id = 10, length = random.randint(10, 1000))
+    #edge channels are not included in the graph, since they are only connected to one node on the edges of the graph
+    #format for edge channel list: [id, node channel is connected to, length]
     edgeChannels.append([0, 0])
     edgeChannels.append([7, 6])
     for x in edgeChannels:
         x.append(random.randint(500, 2000))
+    #send results back in a dictionary
     results = {"graph": G, "edgeChannels": edgeChannels}
     return results

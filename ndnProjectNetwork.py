@@ -25,17 +25,15 @@ def graphConfiguration():
     G.add_edge(0, 1, id = 1, length = random.randint(10, 1000))
     G.add_edge(1, 2, id = 2, length = random.randint(10, 1000))
     G.add_edge(2, 9, id = 3, length = random.randint(10, 1000))
-    G.add_edge(3, 4, id = 5, length = random.randint(10, 1000))
-    G.add_edge(4, 5, id = 6, length = random.randint(10, 1000))
-    G.add_edge(5, 9, id = 7, length = random.randint(10, 1000))
-    G.add_edge(6, 7, id = 9, length = random.randint(10, 1000))
-    G.add_edge(7, 8, id = 10, length = random.randint(10, 1000))
-    G.add_edge(8, 9, id = 11, length = random.randint(10, 1000))
+    G.add_edge(3, 4, id = 4, length = random.randint(10, 1000))
+    G.add_edge(4, 5, id = 5, length = random.randint(10, 1000))
+    G.add_edge(5, 9, id = 6, length = random.randint(10, 1000))
+    G.add_edge(6, 7, id = 8, length = random.randint(10, 1000))
+    G.add_edge(7, 8, id = 9, length = random.randint(10, 1000))
+    G.add_edge(8, 9, id = 10, length = random.randint(10, 1000))
     edgeChannels.append([0, 0])
-    edgeChannels.append([4, 3])
-    edgeChannels.append([8, 6])
+    edgeChannels.append([7, 6])
     for x in edgeChannels:
         x.append(random.randint(500, 2000))
-    data_producers = [9]
-    results = {"graph": G, "edgeChannels": edgeChannels, "dataProducers": data_producers}
+    results = {"graph": G, "edgeChannels": edgeChannels}
     return results

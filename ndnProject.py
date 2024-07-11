@@ -15,8 +15,8 @@ CACHE_SIZE = 6
 BANDWIDTH = 100000000
 SIGNAL_SPEED = 1500
 DELAY_VARIANCE = 0.005
-HI_EXPIRE_TIME = 40
-MI_EXPIRE_TIME = 20
+HI_EXPIRE_TIME = 60
+MI_EXPIRE_TIME = 40
 names = ["autonomous_ship", "autonomous_ship/health_info", "autonomous_ship/mission_info", "autonomous_ship/mission_info/mission_description", "autonomous_ship/mission_info/route", "autonomous_ship/mission_info/antennas", "autonomous_ship/mission_info/antennas/antenna1", "autonomous_ship/mission_info/antennas/antenna2", "autonomous_ship/mission_info/antennas/antenna3", "autonomous_ship/details", "autonomous_ship/details/dimensions", "autonomous_ship/details/name", "autonomous_ship/details/model", "autonomous_ship/details/weight", "autonomous_ship/log"]
 uuv_names = ["uuv", "uuv/health_info", "uuv/mission_info", "uuv/mission_info/mission_log", "uuv/mission_info/route", "uuv/mission_info/antennas", "uuv/mission_info/antennas/antenna1", "uuv/mission_info/antennas/antenna2", "uuv/mission_info/antennas/antenna3", "uuv/mission_info/sensors", "uuv/mission_info/sensors/sensor1", "uuv/mission_info/sensors/sensor2", "uuv/mission_info/sensors/sensor3", "uuv/mission_info/location", "uuv/mission_info/depth", "uuv/health_info/log", "uuv/health_info/antenna_conditions/antenna1", "uuv/health_info/antenna_conditions/antenna2", "uuv/health_info/antenna_conditions/antenna3", "uuv/health_info/sensor_conditions/sensor1", "uuv/health_info/sensor_conditions/sensor2", "uuv/health_info/sensor_conditions/sensor3", "uuv/health_info/battery_level"]
 uuv1 = ["uuv1", "uuv1/health_info", "uuv1/mission_info", "uuv1/mission_info/mission_log", "uuv1/mission_info/route", "uuv1/mission_info/antennas", "uuv1/mission_info/antennas/antenna1", "uuv1/mission_info/antennas/antenna2", "uuv1/mission_info/antennas/antenna3", "uuv1/mission_info/sensors", "uuv1/mission_info/sensors/sensor1", "uuv1/mission_info/sensors/sensor2", "uuv1/mission_info/sensors/sensor3", "uuv1/mission_info/location", "uuv1/mission_info/depth", "uuv1/health_info/log", "uuv1/health_info/antenna_conditions/antenna1", "uuv1/health_info/antenna_conditions/antenna2", "uuv1/health_info/antenna_conditions/antenna3", "uuv1/health_info/sensor_conditions/sensor1", "uuv1/health_info/sensor_conditions/sensor2", "uuv1/health_info/sensor_conditions/sensor3", "uuv1/health_info/battery_level"]
@@ -126,7 +126,6 @@ class Channel(object):
             rNodeId = self.nodes[0]
         if rNodeId != -1:
             logging.info("Channel %s forwarding request for %s to %s", self.id, interest.dataName, rNodeId)
-            nodes[rNodeId].storeLengths[self.id] += 1
             nodes[rNodeId].stores[self.id].put(interest)
     def forwardData(self, d, intrst, nodeId):
         delay = self.length/SIGNAL_SPEED + d.size/self.bandwidth + random.uniform(-DELAY_VARIANCE, DELAY_VARIANCE)
@@ -141,7 +140,7 @@ class Channel(object):
             logging.info("...took %s units", travelTime)
         else:
             logging.info("Channel %s forwarding %s to %s", self.id, d.name, rNodeId)
-            nodes[rNodeId].dataStore.put(d)
+            nodes[rNodeId].dataStores[self.id].put(d)
 class Interest(object):
     def __init__(self, env, id, name):
         self.env = env
@@ -167,13 +166,11 @@ class Node(object):
         self.id = id
         self.name = name
         self.stores = {}
-        self.storeLengths = {}
-        self.requestStore = simpy.Store(env)
-        self.dataStore = simpy.Store(env)
+        self.dataStores = {}
         self.fromChannelIds = fromChannelIds
         for x in fromChannelIds:
             self.stores[x] = simpy.Store(env)
-            self.storeLengths[x] = 0
+            self.dataStores[x] = simpy.Store(env)
         csContents = content
         self.contentStore = ContentStore(self.env, csSize, csContents, p)
         self.pendingInterest = PendingInterest(self.env, piSize)
@@ -183,11 +180,13 @@ class Node(object):
         self.i = -1
     def searchStore(self, storeNum):
         while True:
+            if storeNum == self.fromChannelIds[len(self.fromChannelIds) - 1]:
+                random.shuffle(self.fromChannelIds)
             intrst = yield self.stores[storeNum].get()
             yield self.env.process(self.receiveRequest(intrst, storeNum))
-    def searchData(self):
+    def searchDataStore(self, storeNum):
         while True:
-            data = yield self.dataStore.get()
+            data = yield self.dataStores[storeNum].get()
             yield self.env.process(self.receiveData(data))
     def receiveRequest(self, interest, fromChannelId):
         logging.info("Node %s receiving request for %s", self.id, interest.dataName)
@@ -351,9 +350,9 @@ for n in H.nodes:
     nodes.append(Node(env, n, node_names[n][0], chIds, CACHE_SIZE, 5, 5, content[n], PROB, []))
 env.process(interest_arrival(env, channels))
 for n in nodes:
-    for c in n.fromChannelIds:
-        env.process(n.searchStore(c))
-    env.process(n.searchData())
+    for i in range(0, len(n.fromChannelIds)):
+        env.process(n.searchStore(n.fromChannelIds[i]))
+        env.process(n.searchDataStore(n.fromChannelIds[i]))
 env.run(until=2000)
 total = 0
 length = 0

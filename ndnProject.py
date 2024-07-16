@@ -12,7 +12,7 @@ import ndnProjectNetwork
 logging.basicConfig(level = logging.INFO)
 #user-set variables for simulation
 PROB = 1
-CACHE_SIZE = 20
+CACHE_SIZE = 50
 BANDWIDTH = 100000000
 SIGNAL_SPEED = 1500
 #when delay is calculated, variance will be added as a random float in the range of (-DELAY_VARIANCE, DELAY_VARIANCE)
@@ -138,6 +138,7 @@ class Channel(object):
             #calculate and log how long it took to satisfy the interest
             travelTime = self.env.now - intrst.creationTime
             logging.info("...took %s units", travelTime)
+            returnTimes.append(travelTime)
         else:
             logging.info("Channel %s forwarding %s to %s", self.id, d.name, rNodeId)
             #put the data in the channel's data store in the node
@@ -270,6 +271,7 @@ def interest_arrival(env, channels):
         cIds = [0, 7]
         yield env.process(channels[random.choice(cIds)].forwardRequest(interest, -1))
         interestId += 1
+    
 env = simpy.Environment()
 #lists for nodes and channels keep track of Node and Channel objects ordered by id
 nodes = []
@@ -303,6 +305,7 @@ node_names.append(uuv6)
 #hitDistances indexes match interest ids, each time an interest is created 0 is appended to hitDistances
 #each time a node receives a request it adds one to the hitDistances list where the index equals the interest id
 hitDistances = []
+returnTimes = []
 #cache status keeps track of the number of current caches of each data name across the network
 cacheStatus = {}
 for r in range(0, len(node_names)):
@@ -436,7 +439,12 @@ for n in nodes:
     for i in range(0, len(n.fromChannelIds)):
         env.process(n.searchStore(n.fromChannelIds[i]))
         env.process(n.searchDataStore(n.fromChannelIds[i]))
-env.run(until=2000)
+for i in range(0, 10):
+    env.run(until=env.now + 2000)
+    for n in nodes:
+        n.contentStore.content = []
+    for c in cacheStatus:
+        cacheStatus[c] = 0
 #calculating the average cache hit ratio
 #total calculates the total number of cache hits
 #length counts the total number of requests the nodes have received
@@ -449,6 +457,8 @@ for n in nodes:
 logging.info("Average cache hit ratio: %s", total/length)
 #log the average hit distance
 logging.info("Average hit distance: %s", statistics.mean(hitDistances))
+#log the average return time
+logging.info("Average return time: %s", statistics.mean(returnTimes))
 #make the graph
 center_node = nodes[9]
 edge_nodes = set(H) - {center_node}

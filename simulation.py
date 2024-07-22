@@ -21,15 +21,15 @@ BANDWIDTH = 100000000
 SIGNAL_SPEED = 1500
 # When delay is calculated, variance will be added as a random float in 
 # the range of (-DELAY_VARIANCE, DELAY_VARIANCE).
-DELAY_VARIANCE = 0.005
+DELAY_VARIANCE = 0.5
 
 # Data expires at different times depending on the importance.
-# Here the time health information and mission information can be cached 
+# Here the time health DEBUGrmation and mission DEBUGrmation can be cached 
 # in a CS is pre-defined.
-HI_EXPIRE_TIME = 60
-MI_EXPIRE_TIME = 40
+HI_EXPIRE_TIME = 500
+MI_EXPIRE_TIME = 30
 
-SAMPLES = 4
+SAMPLES = 100
 RUN_TIME = 1000
 
 
@@ -62,11 +62,11 @@ class ContentStore(object):
         # must not be expired.
         for d in self.content:
             if interest.data_name == d.name and d.expire_time > self.env.now:
-                logging.info("Data: %s found in Content Store", interest.data_name)
+                logging.debug("Data: %s found in Content Store", interest.data_name)
                 # If found, return True.
                 return True
             
-        logging.info("Data: %s not found in Content Store", interest.data_name)
+        logging.debug("Data: %s not found in Content Store", interest.data_name)
         # If not found, return False.
         return False
     
@@ -80,7 +80,7 @@ class ContentStore(object):
         for d in self.content:
             if d.expire_time < self.env.now:
                 self.content.remove(d)
-                logging.info("%s has expired and has been removed", d.name)
+                logging.debug("%s has expired and has been removed", d.name)
 
         # CS will cache new data with pre-defined probability PROB.
         numb = random.random()
@@ -110,12 +110,12 @@ class ContentStore(object):
                 cache_status[self.content[min_score_index].name] -= 1
                 self.content.pop(min_score_index)
 
-            logging.info("Cached %s in Content Store", data.name)
+            logging.debug("Cached %s in Content Store", data.name)
 
         else:
-            logging.info("Did not cache %s in Content Store", data.name)
+            logging.debug("Did not cache %s in Content Store", data.name)
 
-        logging.info("Current state of Content Store: %s", self.content)
+        logging.debug("Current state of Content Store: %s", self.content)
 
     def send_data(self, channel_id, interest):
         """Creates Data object and sends it to the specified channel.
@@ -126,7 +126,7 @@ class ContentStore(object):
 
         # Create new data object when responding with data.
         data = Data(self.env, interest.id, interest.data_name)
-        logging.info("Responding with data: %s to channel %s", 
+        logging.debug("Responding with data: %s to channel %s", 
                      interest.data_name, channel_id)
         yield self.env.process(channels[channel_id].forward_data(data, interest, self.node_id))
 
@@ -155,12 +155,12 @@ class PendingInterest(object):
         Returns: boolean"""
     
         if interest.data_name in self.content:
-            logging.info("Data: %s found in Pending Interest Table", interest.data_name)
+            logging.debug("Data: %s found in Pending Interest Table", interest.data_name)
             # Return true if the node has already forwarded an interest for 
             # the data requested.
             return True
         
-        logging.info("Data: %s not found in Pending Interest Table", interest.data_name)
+        logging.debug("Data: %s not found in Pending Interest Table", interest.data_name)
         # Otherwise, return false.
         return False
     
@@ -176,7 +176,7 @@ class PendingInterest(object):
         # Internal dictionaries have the interest objects as values and the 
         # channels which sent the interests as keys.
         self.content[interest.data_name] = {interest: fromId}
-        logging.info("Data: %s added to Pending Interest Table", interest.data_name)
+        logging.debug("Data: %s added to Pending Interest Table", interest.data_name)
 
     def add_interface(self, interest, fromId):
         """Adds Interest object and channel id to an already-existing 
@@ -190,7 +190,7 @@ class PendingInterest(object):
         # dropped and the interest object and the channel which sent it will be 
         # added to the value for the key matching the data name.
         self.content[interest.data_name][interest] = fromId
-        logging.info("Interface: %s added to %s in Pending Interest Table", 
+        logging.debug("Interface: %s added to %s in Pending Interest Table", 
                      fromId, interest.data_name)
         
     def remove(self, data_name):
@@ -200,11 +200,11 @@ class PendingInterest(object):
         data_name -- String which corresponds to the name of the data"""
 
         self.content.pop(data_name)
-        logging.info("Data: %s removed from Pending Interest Table", data_name)
+        logging.debug("Data: %s removed from Pending Interest Table", data_name)
 
 
 class ForwardingBase(object):
-    """Represents the Forwarding Information Base (FIB) of a node and 
+    """Represents the Forwarding DEBUGrmation Base (FIB) of a node and 
     its functions.
     
     Arguments:
@@ -223,7 +223,7 @@ class ForwardingBase(object):
         Arguments:
         interest -- Interest object representing the request"""
 
-        logging.info("Sending request for %s to Channel: %s", interest.data_name, 
+        logging.debug("Sending request for %s to Channel: %s", interest.data_name, 
                      self.content[interest.data_name])
         # When a request is sent, the FIB will check its content for which 
         # channel to forward the interest to based on the data being requested.
@@ -274,7 +274,7 @@ class Channel(object):
         # -1, since these are users which do not have defined nodes in 
         # this simulation.
         if rnode_id != -1:
-            logging.info("Channel %s forwarding request for %s to %s", self.id, 
+            logging.debug("Channel %s forwarding request for %s to %s", self.id, 
                          interest.data_name, rnode_id)
             # Put the interest in the channel's store in the node.
             nodes[rnode_id].stores[self.id].put(interest)
@@ -308,14 +308,14 @@ class Channel(object):
         # channel is returning the data back to the original user who requested 
         # it, and the process is over for the interest.
         if rnode_id == -1:
-            logging.info("Returning data: %s to user", data.name)
+            logging.debug("Returning data: %s to user", data.name)
             # Calculate and log how long it took to satisfy the interest.
             return_time = self.env.now - interest.creation_time
-            logging.info("...took %s units", return_time)
+            logging.debug("...took %s units", return_time)
             return_times.append(return_time)
 
         else:
-            logging.info("Channel %s forwarding %s to %s", self.id, data.name, rnode_id)
+            logging.debug("Channel %s forwarding %s to %s", self.id, data.name, rnode_id)
             # Put the data in the channel's data store in the node.
             nodes[rnode_id].data_stores[self.id].put(data)
 
@@ -350,10 +350,11 @@ class Data(object):
         self.name = name
         # Size of data packet has an inverse relationship with the specificity 
         # of the data.
-        self.size = 40 + 524280/(name.count('/') + 1)
+        self.size = 2000 + random.uniform(-200, 200)
+        #self.size = 40 + 524280/(name.count('/') + 1)
         self.send_time = self.env.now
         # The time the data expires is determined based on the type of data
-        if "health_info" in self.name:
+        if "health_DEBUG" in self.name:
             self.expire_time = self.send_time + HI_EXPIRE_TIME
 
         else:
@@ -444,7 +445,7 @@ class Node(object):
         interest -- Interest object representing request
         fromchannel_id -- id of channel interest came from"""
 
-        logging.info("Node %s receiving request for %s", self.id, interest.data_name)
+        logging.debug("Node %s receiving request for %s", self.id, interest.data_name)
         # the node's total hits goes up by one when receiving an interest, 
         # and the hit distance for that interest also goes up by one
         self.total_requests += 1
@@ -459,9 +460,9 @@ class Node(object):
         # below checks if the node is the producer for the data requested, 
         # if so, it creates a data packet and sends it back
         if interest.data_name.startswith(self.name):
-            logging.info("%s receiving request for %s", self.name, interest.data_name)
+            logging.debug("%s receiving request for %s", self.name, interest.data_name)
             data = Data(self.env, interest.id, interest.data_name)
-            logging.info("Responding with data: %s to channel %s", 
+            logging.debug("Responding with data: %s to channel %s", 
                          interest.data_name, fromchannel_id)
             yield self.env.process(channels[fromchannel_id].forward_data(data, interest, 
                                                                        self.id))
@@ -469,7 +470,7 @@ class Node(object):
         # below checks if the requested data is in the node's CS, if so, it 
         # creates a data packet and sends it back
         elif self.content_store.search(interest):
-            logging.info("Going to respond with data...")
+            logging.debug("Going to respond with data...")
             # cache hits goes up by one
             self.cache_hits += 1
             # a hit occurs on the cache hits timeline graph
@@ -496,9 +497,9 @@ class Node(object):
         Arguments:
         data -- Data object representing data package"""
 
-        logging.info("Node %s receiving data: %s", self.id, data.name)
+        logging.debug("Node %s receiving data: %s", self.id, data.name)
 
-        # the intrsts and channel_ids lists hold the important information for 
+        # the intrsts and channel_ids lists hold the important DEBUGrmation for 
         # forwarding the data
         # entries in these lists with the same index are connected
         intrsts = []
@@ -535,13 +536,13 @@ def interest_arrival():
     # name = names[random.randint(0, len(names))-1]
     # interest = Interest(env, interest_id, name)
     # hit_distances.append(0)
-    # logging.info("About to send request for %s", interest.data_name)
+    # logging.debug("About to send request for %s", interest.data_name)
     # yield env.process(channels[0].forward_interest(interest, -1))
     # yield env.timeout(0.5)
     # interest_id = 1
     # interest = Interest(env, interest_id, name)
     # hit_distances.append(0)
-    # logging.info("About to send request for %s", interest.data_name)
+    # logging.debug("About to send request for %s", interest.data_name)
     # yield env.process(channels[0].forward_interest(interest, -1))
     # below is the looping version of the interest generator
     while True:
@@ -562,7 +563,7 @@ def interest_arrival():
         #creating new entry in hit distances list
         hit_distances.append(0)
 
-        logging.info("About to send request for %s", interest.data_name)
+        logging.debug("About to send request for %s", interest.data_name)
         #new interests will be sent through random edge channel
         yield env.process(channels[random.choice(channel_ids)].forward_interest(interest, -1))
         interest_id += 1
@@ -575,22 +576,22 @@ nodes = []
 channels = []
 
 #defining data names for each data-producing node
-uuv_names = ["uuv", "uuv/health_info", "uuv/mission_info", "uuv/mission_info/mission_log", "uuv/mission_info/route", "uuv/mission_info/antennas", "uuv/mission_info/antennas/antenna1", "uuv/mission_info/antennas/antenna2", "uuv/mission_info/antennas/antenna3", "uuv/mission_info/sensors", "uuv/mission_info/sensors/sensor1", "uuv/mission_info/sensors/sensor2", "uuv/mission_info/sensors/sensor3", "uuv/mission_info/location", "uuv/mission_info/depth", "uuv/health_info/log", "uuv/health_info/antenna_conditions/antenna1", "uuv/health_info/antenna_conditions/antenna2", "uuv/health_info/antenna_conditions/antenna3", "uuv/health_info/sensor_conditions/sensor1", "uuv/health_info/sensor_conditions/sensor2", "uuv/health_info/sensor_conditions/sensor3", "uuv/health_info/battery_level"]
-uuv1 = ["uuv1", "uuv1/health_info", "uuv1/mission_info", "uuv1/mission_info/mission_log", "uuv1/mission_info/route", "uuv1/mission_info/antennas", "uuv1/mission_info/antennas/antenna1", "uuv1/mission_info/antennas/antenna2", "uuv1/mission_info/antennas/antenna3", "uuv1/mission_info/sensors", "uuv1/mission_info/sensors/sensor1", "uuv1/mission_info/sensors/sensor2", "uuv1/mission_info/sensors/sensor3", "uuv1/mission_info/location", "uuv1/mission_info/depth", "uuv1/health_info/log", "uuv1/health_info/antenna_conditions/antenna1", "uuv1/health_info/antenna_conditions/antenna2", "uuv1/health_info/antenna_conditions/antenna3", "uuv1/health_info/sensor_conditions/sensor1", "uuv1/health_info/sensor_conditions/sensor2", "uuv1/health_info/sensor_conditions/sensor3", "uuv1/health_info/battery_level"]
-uuv2 = ["uuv2", "uuv2/health_info", "uuv2/mission_info", "uuv2/mission_info/mission_log", "uuv2/mission_info/route", "uuv2/mission_info/antennas", "uuv2/mission_info/antennas/antenna1", "uuv2/mission_info/antennas/antenna2", "uuv2/mission_info/antennas/antenna3", "uuv2/mission_info/sensors", "uuv2/mission_info/sensors/sensor1", "uuv2/mission_info/sensors/sensor2", "uuv2/mission_info/sensors/sensor3", "uuv2/mission_info/location", "uuv2/mission_info/depth", "uuv2/health_info/log", "uuv2/health_info/antenna_conditions/antenna1", "uuv2/health_info/antenna_conditions/antenna2", "uuv2/health_info/antenna_conditions/antenna3", "uuv2/health_info/sensor_conditions/sensor1", "uuv2/health_info/sensor_conditions/sensor2", "uuv2/health_info/sensor_conditions/sensor3", "uuv2/health_info/battery_level"]
-uuv3 = ["uuv3", "uuv3/health_info", "uuv3/mission_info", "uuv3/mission_info/mission_log", "uuv3/mission_info/route", "uuv3/mission_info/antennas", "uuv3/mission_info/antennas/antenna1", "uuv3/mission_info/antennas/antenna2", "uuv3/mission_info/antennas/antenna3", "uuv3/mission_info/sensors", "uuv3/mission_info/sensors/sensor1", "uuv3/mission_info/sensors/sensor2", "uuv3/mission_info/sensors/sensor3", "uuv3/mission_info/location", "uuv3/mission_info/depth", "uuv3/health_info/log", "uuv3/health_info/antenna_conditions/antenna1", "uuv3/health_info/antenna_conditions/antenna2", "uuv3/health_info/antenna_conditions/antenna3", "uuv3/health_info/sensor_conditions/sensor1", "uuv3/health_info/sensor_conditions/sensor2", "uuv3/health_info/sensor_conditions/sensor3", "uuv3/health_info/battery_level"]
-uuv4 = ["uuv4", "uuv4/health_info", "uuv4/mission_info", "uuv4/mission_info/mission_log", "uuv4/mission_info/route", "uuv4/mission_info/antennas", "uuv4/mission_info/antennas/antenna1", "uuv4/mission_info/antennas/antenna2", "uuv4/mission_info/antennas/antenna3", "uuv4/mission_info/sensors", "uuv4/mission_info/sensors/sensor1", "uuv4/mission_info/sensors/sensor2", "uuv4/mission_info/sensors/sensor3", "uuv4/mission_info/location", "uuv4/mission_info/depth", "uuv4/health_info/log", "uuv4/health_info/antenna_conditions/antenna1", "uuv4/health_info/antenna_conditions/antenna2", "uuv4/health_info/antenna_conditions/antenna3", "uuv4/health_info/sensor_conditions/sensor1", "uuv4/health_info/sensor_conditions/sensor2", "uuv4/health_info/sensor_conditions/sensor3", "uuv4/health_info/battery_level"]
-uuv5 = ["uuv5", "uuv5/health_info", "uuv5/mission_info", "uuv5/mission_info/mission_log", "uuv5/mission_info/route", "uuv5/mission_info/antennas", "uuv5/mission_info/antennas/antenna1", "uuv5/mission_info/antennas/antenna2", "uuv5/mission_info/antennas/antenna3", "uuv5/mission_info/sensors", "uuv5/mission_info/sensors/sensor1", "uuv5/mission_info/sensors/sensor2", "uuv5/mission_info/sensors/sensor3", "uuv5/mission_info/location", "uuv5/mission_info/depth", "uuv5/health_info/log", "uuv5/health_info/antenna_conditions/antenna1", "uuv5/health_info/antenna_conditions/antenna2", "uuv5/health_info/antenna_conditions/antenna3", "uuv5/health_info/sensor_conditions/sensor1", "uuv5/health_info/sensor_conditions/sensor2", "uuv5/health_info/sensor_conditions/sensor3", "uuv5/health_info/battery_level"]
-uuv6 = ["uuv6", "uuv6/health_info", "uuv6/mission_info", "uuv6/mission_info/mission_log", "uuv6/mission_info/route", "uuv6/mission_info/antennas", "uuv6/mission_info/antennas/antenna1", "uuv6/mission_info/antennas/antenna2", "uuv6/mission_info/antennas/antenna3", "uuv6/mission_info/sensors", "uuv6/mission_info/sensors/sensor1", "uuv6/mission_info/sensors/sensor2", "uuv6/mission_info/sensors/sensor3", "uuv6/mission_info/location", "uuv6/mission_info/depth", "uuv6/health_info/log", "uuv6/health_info/antenna_conditions/antenna1", "uuv6/health_info/antenna_conditions/antenna2", "uuv6/health_info/antenna_conditions/antenna3", "uuv6/health_info/sensor_conditions/sensor1", "uuv6/health_info/sensor_conditions/sensor2", "uuv6/health_info/sensor_conditions/sensor3", "uuv6/health_info/battery_level"]
-uuv7 = ["uuv7", "uuv7/health_info", "uuv7/mission_info", "uuv7/mission_info/mission_log", "uuv7/mission_info/route", "uuv7/mission_info/antennas", "uuv7/mission_info/antennas/antenna1", "uuv7/mission_info/antennas/antenna2", "uuv7/mission_info/antennas/antenna3", "uuv7/mission_info/sensors", "uuv7/mission_info/sensors/sensor1", "uuv7/mission_info/sensors/sensor2", "uuv7/mission_info/sensors/sensor3", "uuv7/mission_info/location", "uuv7/mission_info/depth", "uuv7/health_info/log", "uuv7/health_info/antenna_conditions/antenna1", "uuv7/health_info/antenna_conditions/antenna2", "uuv7/health_info/antenna_conditions/antenna3", "uuv7/health_info/sensor_conditions/sensor1", "uuv7/health_info/sensor_conditions/sensor2", "uuv7/health_info/sensor_conditions/sensor3", "uuv7/health_info/battery_level"]
-uuv8 = ["uuv8", "uuv8/health_info", "uuv8/mission_info", "uuv8/mission_info/mission_log", "uuv8/mission_info/route", "uuv8/mission_info/antennas", "uuv8/mission_info/antennas/antenna1", "uuv8/mission_info/antennas/antenna2", "uuv8/mission_info/antennas/antenna3", "uuv8/mission_info/sensors", "uuv8/mission_info/sensors/sensor1", "uuv8/mission_info/sensors/sensor2", "uuv8/mission_info/sensors/sensor3", "uuv8/mission_info/location", "uuv8/mission_info/depth", "uuv8/health_info/log", "uuv8/health_info/antenna_conditions/antenna1", "uuv8/health_info/antenna_conditions/antenna2", "uuv8/health_info/antenna_conditions/antenna3", "uuv8/health_info/sensor_conditions/sensor1", "uuv8/health_info/sensor_conditions/sensor2", "uuv8/health_info/sensor_conditions/sensor3", "uuv8/health_info/battery_level"]
-usv_names = ["usv", "usv/health_info", "usv/mission_info", "usv/mission_info/mission_log", "usv/mission_info/route", "usv/mission_info/antennas", "usv/mission_info/antennas/antenna1", "usv/mission_info/antennas/antenna2", "usv/mission_info/antennas/antenna3", "usv/mission_info/sensors", "usv/mission_info/sensors/sensor1", "usv/mission_info/sensors/sensor2", "usv/mission_info/sensors/sensor3", "usv/mission_info/location", "usv/health_info/log", "usv/health_info/antenna_conditions/antenna1", "usv/health_info/antenna_conditions/antenna2", "usv/health_info/antenna_conditions/antenna3", "usv/health_info/sensor_conditions/sensor1", "usv/health_info/sensor_conditions/sensor2", "usv/health_info/sensor_conditions/sensor3", "usv/health_info/battery_level"]
-usv1 = ["usv1", "usv1/health_info", "usv1/mission_info", "usv1/mission_info/mission_log", "usv1/mission_info/route", "usv1/mission_info/antennas", "usv1/mission_info/antennas/antenna1", "usv1/mission_info/antennas/antenna2", "usv1/mission_info/antennas/antenna3", "usv1/mission_info/sensors", "usv1/mission_info/sensors/sensor1", "usv1/mission_info/sensors/sensor2", "usv1/mission_info/sensors/sensor3", "usv1/mission_info/location", "usv1/health_info/log", "usv1/health_info/antenna_conditions/antenna1", "usv1/health_info/antenna_conditions/antenna2", "usv1/health_info/antenna_conditions/antenna3", "usv1/health_info/sensor_conditions/sensor1", "usv1/health_info/sensor_conditions/sensor2", "usv1/health_info/sensor_conditions/sensor3", "usv1/health_info/battery_level"]
-usv2 = ["usv2", "usv2/health_info", "usv2/mission_info", "usv2/mission_info/mission_log", "usv2/mission_info/route", "usv2/mission_info/antennas", "usv2/mission_info/antennas/antenna1", "usv2/mission_info/antennas/antenna2", "usv2/mission_info/antennas/antenna3", "usv2/mission_info/sensors", "usv2/mission_info/sensors/sensor1", "usv2/mission_info/sensors/sensor2", "usv2/mission_info/sensors/sensor3", "usv2/mission_info/location", "usv2/health_info/log", "usv2/health_info/antenna_conditions/antenna1", "usv2/health_info/antenna_conditions/antenna2", "usv2/health_info/antenna_conditions/antenna3", "usv2/health_info/sensor_conditions/sensor1", "usv2/health_info/sensor_conditions/sensor2", "usv2/health_info/sensor_conditions/sensor3", "usv2/health_info/battery_level"]
-usv3 = ["usv3", "usv3/health_info", "usv3/mission_info", "usv3/mission_info/mission_log", "usv3/mission_info/route", "usv3/mission_info/antennas", "usv3/mission_info/antennas/antenna1", "usv3/mission_info/antennas/antenna2", "usv3/mission_info/antennas/antenna3", "usv3/mission_info/sensors", "usv3/mission_info/sensors/sensor1", "usv3/mission_info/sensors/sensor2", "usv3/mission_info/sensors/sensor3", "usv3/mission_info/location", "usv3/health_info/log", "usv3/health_info/antenna_conditions/antenna1", "usv3/health_info/antenna_conditions/antenna2", "usv3/health_info/antenna_conditions/antenna3", "usv3/health_info/sensor_conditions/sensor1", "usv3/health_info/sensor_conditions/sensor2", "usv3/health_info/sensor_conditions/sensor3", "usv3/health_info/battery_level"]
-usv4 = ["usv4", "usv4/health_info", "usv4/mission_info", "usv4/mission_info/mission_log", "usv4/mission_info/route", "usv4/mission_info/antennas", "usv4/mission_info/antennas/antenna1", "usv4/mission_info/antennas/antenna2", "usv4/mission_info/antennas/antenna3", "usv4/mission_info/sensors", "usv4/mission_info/sensors/sensor1", "usv4/mission_info/sensors/sensor2", "usv4/mission_info/sensors/sensor3", "usv4/mission_info/location", "usv4/health_info/log", "usv4/health_info/antenna_conditions/antenna1", "usv4/health_info/antenna_conditions/antenna2", "usv4/health_info/antenna_conditions/antenna3", "usv4/health_info/sensor_conditions/sensor1", "usv4/health_info/sensor_conditions/sensor2", "usv4/health_info/sensor_conditions/sensor3", "usv4/health_info/battery_level"]
-usv5 = ["usv5", "usv5/health_info", "usv5/mission_info", "usv5/mission_info/mission_log", "usv5/mission_info/route", "usv5/mission_info/antennas", "usv5/mission_info/antennas/antenna1", "usv5/mission_info/antennas/antenna2", "usv5/mission_info/antennas/antenna3", "usv5/mission_info/sensors", "usv5/mission_info/sensors/sensor1", "usv5/mission_info/sensors/sensor2", "usv5/mission_info/sensors/sensor3", "usv5/mission_info/location", "usv5/health_info/log", "usv5/health_info/antenna_conditions/antenna1", "usv5/health_info/antenna_conditions/antenna2", "usv5/health_info/antenna_conditions/antenna3", "usv5/health_info/sensor_conditions/sensor1", "usv5/health_info/sensor_conditions/sensor2", "usv5/health_info/sensor_conditions/sensor3", "usv5/health_info/battery_level"]
-usv6 = ["usv6", "usv6/health_info", "usv6/mission_info", "usv6/mission_info/mission_log", "usv6/mission_info/route", "usv6/mission_info/antennas", "usv6/mission_info/antennas/antenna1", "usv6/mission_info/antennas/antenna2", "usv6/mission_info/antennas/antenna3", "usv6/mission_info/sensors", "usv6/mission_info/sensors/sensor1", "usv6/mission_info/sensors/sensor2", "usv6/mission_info/sensors/sensor3", "usv6/mission_info/location", "usv6/health_info/log", "usv6/health_info/antenna_conditions/antenna1", "usv6/health_info/antenna_conditions/antenna2", "usv6/health_info/antenna_conditions/antenna3", "usv6/health_info/sensor_conditions/sensor1", "usv6/health_info/sensor_conditions/sensor2", "usv6/health_info/sensor_conditions/sensor3", "usv6/health_info/battery_level"]
+uuv_names = ["uuv", "uuv/health_DEBUG", "uuv/mission_DEBUG", "uuv/mission_DEBUG/mission_log", "uuv/mission_DEBUG/route", "uuv/mission_DEBUG/antennas", "uuv/mission_DEBUG/antennas/antenna1", "uuv/mission_DEBUG/antennas/antenna2", "uuv/mission_DEBUG/antennas/antenna3", "uuv/mission_DEBUG/sensors", "uuv/mission_DEBUG/sensors/sensor1", "uuv/mission_DEBUG/sensors/sensor2", "uuv/mission_DEBUG/sensors/sensor3", "uuv/mission_DEBUG/location", "uuv/mission_DEBUG/depth", "uuv/health_DEBUG/log", "uuv/health_DEBUG/antenna_conditions/antenna1", "uuv/health_DEBUG/antenna_conditions/antenna2", "uuv/health_DEBUG/antenna_conditions/antenna3", "uuv/health_DEBUG/sensor_conditions/sensor1", "uuv/health_DEBUG/sensor_conditions/sensor2", "uuv/health_DEBUG/sensor_conditions/sensor3", "uuv/health_DEBUG/battery_level"]
+uuv1 = ["uuv1", "uuv1/health_DEBUG", "uuv1/mission_DEBUG", "uuv1/mission_DEBUG/mission_log", "uuv1/mission_DEBUG/route", "uuv1/mission_DEBUG/antennas", "uuv1/mission_DEBUG/antennas/antenna1", "uuv1/mission_DEBUG/antennas/antenna2", "uuv1/mission_DEBUG/antennas/antenna3", "uuv1/mission_DEBUG/sensors", "uuv1/mission_DEBUG/sensors/sensor1", "uuv1/mission_DEBUG/sensors/sensor2", "uuv1/mission_DEBUG/sensors/sensor3", "uuv1/mission_DEBUG/location", "uuv1/mission_DEBUG/depth", "uuv1/health_DEBUG/log", "uuv1/health_DEBUG/antenna_conditions/antenna1", "uuv1/health_DEBUG/antenna_conditions/antenna2", "uuv1/health_DEBUG/antenna_conditions/antenna3", "uuv1/health_DEBUG/sensor_conditions/sensor1", "uuv1/health_DEBUG/sensor_conditions/sensor2", "uuv1/health_DEBUG/sensor_conditions/sensor3", "uuv1/health_DEBUG/battery_level"]
+uuv2 = ["uuv2", "uuv2/health_DEBUG", "uuv2/mission_DEBUG", "uuv2/mission_DEBUG/mission_log", "uuv2/mission_DEBUG/route", "uuv2/mission_DEBUG/antennas", "uuv2/mission_DEBUG/antennas/antenna1", "uuv2/mission_DEBUG/antennas/antenna2", "uuv2/mission_DEBUG/antennas/antenna3", "uuv2/mission_DEBUG/sensors", "uuv2/mission_DEBUG/sensors/sensor1", "uuv2/mission_DEBUG/sensors/sensor2", "uuv2/mission_DEBUG/sensors/sensor3", "uuv2/mission_DEBUG/location", "uuv2/mission_DEBUG/depth", "uuv2/health_DEBUG/log", "uuv2/health_DEBUG/antenna_conditions/antenna1", "uuv2/health_DEBUG/antenna_conditions/antenna2", "uuv2/health_DEBUG/antenna_conditions/antenna3", "uuv2/health_DEBUG/sensor_conditions/sensor1", "uuv2/health_DEBUG/sensor_conditions/sensor2", "uuv2/health_DEBUG/sensor_conditions/sensor3", "uuv2/health_DEBUG/battery_level"]
+uuv3 = ["uuv3", "uuv3/health_DEBUG", "uuv3/mission_DEBUG", "uuv3/mission_DEBUG/mission_log", "uuv3/mission_DEBUG/route", "uuv3/mission_DEBUG/antennas", "uuv3/mission_DEBUG/antennas/antenna1", "uuv3/mission_DEBUG/antennas/antenna2", "uuv3/mission_DEBUG/antennas/antenna3", "uuv3/mission_DEBUG/sensors", "uuv3/mission_DEBUG/sensors/sensor1", "uuv3/mission_DEBUG/sensors/sensor2", "uuv3/mission_DEBUG/sensors/sensor3", "uuv3/mission_DEBUG/location", "uuv3/mission_DEBUG/depth", "uuv3/health_DEBUG/log", "uuv3/health_DEBUG/antenna_conditions/antenna1", "uuv3/health_DEBUG/antenna_conditions/antenna2", "uuv3/health_DEBUG/antenna_conditions/antenna3", "uuv3/health_DEBUG/sensor_conditions/sensor1", "uuv3/health_DEBUG/sensor_conditions/sensor2", "uuv3/health_DEBUG/sensor_conditions/sensor3", "uuv3/health_DEBUG/battery_level"]
+uuv4 = ["uuv4", "uuv4/health_DEBUG", "uuv4/mission_DEBUG", "uuv4/mission_DEBUG/mission_log", "uuv4/mission_DEBUG/route", "uuv4/mission_DEBUG/antennas", "uuv4/mission_DEBUG/antennas/antenna1", "uuv4/mission_DEBUG/antennas/antenna2", "uuv4/mission_DEBUG/antennas/antenna3", "uuv4/mission_DEBUG/sensors", "uuv4/mission_DEBUG/sensors/sensor1", "uuv4/mission_DEBUG/sensors/sensor2", "uuv4/mission_DEBUG/sensors/sensor3", "uuv4/mission_DEBUG/location", "uuv4/mission_DEBUG/depth", "uuv4/health_DEBUG/log", "uuv4/health_DEBUG/antenna_conditions/antenna1", "uuv4/health_DEBUG/antenna_conditions/antenna2", "uuv4/health_DEBUG/antenna_conditions/antenna3", "uuv4/health_DEBUG/sensor_conditions/sensor1", "uuv4/health_DEBUG/sensor_conditions/sensor2", "uuv4/health_DEBUG/sensor_conditions/sensor3", "uuv4/health_DEBUG/battery_level"]
+uuv5 = ["uuv5", "uuv5/health_DEBUG", "uuv5/mission_DEBUG", "uuv5/mission_DEBUG/mission_log", "uuv5/mission_DEBUG/route", "uuv5/mission_DEBUG/antennas", "uuv5/mission_DEBUG/antennas/antenna1", "uuv5/mission_DEBUG/antennas/antenna2", "uuv5/mission_DEBUG/antennas/antenna3", "uuv5/mission_DEBUG/sensors", "uuv5/mission_DEBUG/sensors/sensor1", "uuv5/mission_DEBUG/sensors/sensor2", "uuv5/mission_DEBUG/sensors/sensor3", "uuv5/mission_DEBUG/location", "uuv5/mission_DEBUG/depth", "uuv5/health_DEBUG/log", "uuv5/health_DEBUG/antenna_conditions/antenna1", "uuv5/health_DEBUG/antenna_conditions/antenna2", "uuv5/health_DEBUG/antenna_conditions/antenna3", "uuv5/health_DEBUG/sensor_conditions/sensor1", "uuv5/health_DEBUG/sensor_conditions/sensor2", "uuv5/health_DEBUG/sensor_conditions/sensor3", "uuv5/health_DEBUG/battery_level"]
+uuv6 = ["uuv6", "uuv6/health_DEBUG", "uuv6/mission_DEBUG", "uuv6/mission_DEBUG/mission_log", "uuv6/mission_DEBUG/route", "uuv6/mission_DEBUG/antennas", "uuv6/mission_DEBUG/antennas/antenna1", "uuv6/mission_DEBUG/antennas/antenna2", "uuv6/mission_DEBUG/antennas/antenna3", "uuv6/mission_DEBUG/sensors", "uuv6/mission_DEBUG/sensors/sensor1", "uuv6/mission_DEBUG/sensors/sensor2", "uuv6/mission_DEBUG/sensors/sensor3", "uuv6/mission_DEBUG/location", "uuv6/mission_DEBUG/depth", "uuv6/health_DEBUG/log", "uuv6/health_DEBUG/antenna_conditions/antenna1", "uuv6/health_DEBUG/antenna_conditions/antenna2", "uuv6/health_DEBUG/antenna_conditions/antenna3", "uuv6/health_DEBUG/sensor_conditions/sensor1", "uuv6/health_DEBUG/sensor_conditions/sensor2", "uuv6/health_DEBUG/sensor_conditions/sensor3", "uuv6/health_DEBUG/battery_level"]
+uuv7 = ["uuv7", "uuv7/health_DEBUG", "uuv7/mission_DEBUG", "uuv7/mission_DEBUG/mission_log", "uuv7/mission_DEBUG/route", "uuv7/mission_DEBUG/antennas", "uuv7/mission_DEBUG/antennas/antenna1", "uuv7/mission_DEBUG/antennas/antenna2", "uuv7/mission_DEBUG/antennas/antenna3", "uuv7/mission_DEBUG/sensors", "uuv7/mission_DEBUG/sensors/sensor1", "uuv7/mission_DEBUG/sensors/sensor2", "uuv7/mission_DEBUG/sensors/sensor3", "uuv7/mission_DEBUG/location", "uuv7/mission_DEBUG/depth", "uuv7/health_DEBUG/log", "uuv7/health_DEBUG/antenna_conditions/antenna1", "uuv7/health_DEBUG/antenna_conditions/antenna2", "uuv7/health_DEBUG/antenna_conditions/antenna3", "uuv7/health_DEBUG/sensor_conditions/sensor1", "uuv7/health_DEBUG/sensor_conditions/sensor2", "uuv7/health_DEBUG/sensor_conditions/sensor3", "uuv7/health_DEBUG/battery_level"]
+uuv8 = ["uuv8", "uuv8/health_DEBUG", "uuv8/mission_DEBUG", "uuv8/mission_DEBUG/mission_log", "uuv8/mission_DEBUG/route", "uuv8/mission_DEBUG/antennas", "uuv8/mission_DEBUG/antennas/antenna1", "uuv8/mission_DEBUG/antennas/antenna2", "uuv8/mission_DEBUG/antennas/antenna3", "uuv8/mission_DEBUG/sensors", "uuv8/mission_DEBUG/sensors/sensor1", "uuv8/mission_DEBUG/sensors/sensor2", "uuv8/mission_DEBUG/sensors/sensor3", "uuv8/mission_DEBUG/location", "uuv8/mission_DEBUG/depth", "uuv8/health_DEBUG/log", "uuv8/health_DEBUG/antenna_conditions/antenna1", "uuv8/health_DEBUG/antenna_conditions/antenna2", "uuv8/health_DEBUG/antenna_conditions/antenna3", "uuv8/health_DEBUG/sensor_conditions/sensor1", "uuv8/health_DEBUG/sensor_conditions/sensor2", "uuv8/health_DEBUG/sensor_conditions/sensor3", "uuv8/health_DEBUG/battery_level"]
+usv_names = ["usv", "usv/health_DEBUG", "usv/mission_DEBUG", "usv/mission_DEBUG/mission_log", "usv/mission_DEBUG/route", "usv/mission_DEBUG/antennas", "usv/mission_DEBUG/antennas/antenna1", "usv/mission_DEBUG/antennas/antenna2", "usv/mission_DEBUG/antennas/antenna3", "usv/mission_DEBUG/sensors", "usv/mission_DEBUG/sensors/sensor1", "usv/mission_DEBUG/sensors/sensor2", "usv/mission_DEBUG/sensors/sensor3", "usv/mission_DEBUG/location", "usv/health_DEBUG/log", "usv/health_DEBUG/antenna_conditions/antenna1", "usv/health_DEBUG/antenna_conditions/antenna2", "usv/health_DEBUG/antenna_conditions/antenna3", "usv/health_DEBUG/sensor_conditions/sensor1", "usv/health_DEBUG/sensor_conditions/sensor2", "usv/health_DEBUG/sensor_conditions/sensor3", "usv/health_DEBUG/battery_level"]
+usv1 = ["usv1", "usv1/health_DEBUG", "usv1/mission_DEBUG", "usv1/mission_DEBUG/mission_log", "usv1/mission_DEBUG/route", "usv1/mission_DEBUG/antennas", "usv1/mission_DEBUG/antennas/antenna1", "usv1/mission_DEBUG/antennas/antenna2", "usv1/mission_DEBUG/antennas/antenna3", "usv1/mission_DEBUG/sensors", "usv1/mission_DEBUG/sensors/sensor1", "usv1/mission_DEBUG/sensors/sensor2", "usv1/mission_DEBUG/sensors/sensor3", "usv1/mission_DEBUG/location", "usv1/health_DEBUG/log", "usv1/health_DEBUG/antenna_conditions/antenna1", "usv1/health_DEBUG/antenna_conditions/antenna2", "usv1/health_DEBUG/antenna_conditions/antenna3", "usv1/health_DEBUG/sensor_conditions/sensor1", "usv1/health_DEBUG/sensor_conditions/sensor2", "usv1/health_DEBUG/sensor_conditions/sensor3", "usv1/health_DEBUG/battery_level"]
+usv2 = ["usv2", "usv2/health_DEBUG", "usv2/mission_DEBUG", "usv2/mission_DEBUG/mission_log", "usv2/mission_DEBUG/route", "usv2/mission_DEBUG/antennas", "usv2/mission_DEBUG/antennas/antenna1", "usv2/mission_DEBUG/antennas/antenna2", "usv2/mission_DEBUG/antennas/antenna3", "usv2/mission_DEBUG/sensors", "usv2/mission_DEBUG/sensors/sensor1", "usv2/mission_DEBUG/sensors/sensor2", "usv2/mission_DEBUG/sensors/sensor3", "usv2/mission_DEBUG/location", "usv2/health_DEBUG/log", "usv2/health_DEBUG/antenna_conditions/antenna1", "usv2/health_DEBUG/antenna_conditions/antenna2", "usv2/health_DEBUG/antenna_conditions/antenna3", "usv2/health_DEBUG/sensor_conditions/sensor1", "usv2/health_DEBUG/sensor_conditions/sensor2", "usv2/health_DEBUG/sensor_conditions/sensor3", "usv2/health_DEBUG/battery_level"]
+usv3 = ["usv3", "usv3/health_DEBUG", "usv3/mission_DEBUG", "usv3/mission_DEBUG/mission_log", "usv3/mission_DEBUG/route", "usv3/mission_DEBUG/antennas", "usv3/mission_DEBUG/antennas/antenna1", "usv3/mission_DEBUG/antennas/antenna2", "usv3/mission_DEBUG/antennas/antenna3", "usv3/mission_DEBUG/sensors", "usv3/mission_DEBUG/sensors/sensor1", "usv3/mission_DEBUG/sensors/sensor2", "usv3/mission_DEBUG/sensors/sensor3", "usv3/mission_DEBUG/location", "usv3/health_DEBUG/log", "usv3/health_DEBUG/antenna_conditions/antenna1", "usv3/health_DEBUG/antenna_conditions/antenna2", "usv3/health_DEBUG/antenna_conditions/antenna3", "usv3/health_DEBUG/sensor_conditions/sensor1", "usv3/health_DEBUG/sensor_conditions/sensor2", "usv3/health_DEBUG/sensor_conditions/sensor3", "usv3/health_DEBUG/battery_level"]
+usv4 = ["usv4", "usv4/health_DEBUG", "usv4/mission_DEBUG", "usv4/mission_DEBUG/mission_log", "usv4/mission_DEBUG/route", "usv4/mission_DEBUG/antennas", "usv4/mission_DEBUG/antennas/antenna1", "usv4/mission_DEBUG/antennas/antenna2", "usv4/mission_DEBUG/antennas/antenna3", "usv4/mission_DEBUG/sensors", "usv4/mission_DEBUG/sensors/sensor1", "usv4/mission_DEBUG/sensors/sensor2", "usv4/mission_DEBUG/sensors/sensor3", "usv4/mission_DEBUG/location", "usv4/health_DEBUG/log", "usv4/health_DEBUG/antenna_conditions/antenna1", "usv4/health_DEBUG/antenna_conditions/antenna2", "usv4/health_DEBUG/antenna_conditions/antenna3", "usv4/health_DEBUG/sensor_conditions/sensor1", "usv4/health_DEBUG/sensor_conditions/sensor2", "usv4/health_DEBUG/sensor_conditions/sensor3", "usv4/health_DEBUG/battery_level"]
+usv5 = ["usv5", "usv5/health_DEBUG", "usv5/mission_DEBUG", "usv5/mission_DEBUG/mission_log", "usv5/mission_DEBUG/route", "usv5/mission_DEBUG/antennas", "usv5/mission_DEBUG/antennas/antenna1", "usv5/mission_DEBUG/antennas/antenna2", "usv5/mission_DEBUG/antennas/antenna3", "usv5/mission_DEBUG/sensors", "usv5/mission_DEBUG/sensors/sensor1", "usv5/mission_DEBUG/sensors/sensor2", "usv5/mission_DEBUG/sensors/sensor3", "usv5/mission_DEBUG/location", "usv5/health_DEBUG/log", "usv5/health_DEBUG/antenna_conditions/antenna1", "usv5/health_DEBUG/antenna_conditions/antenna2", "usv5/health_DEBUG/antenna_conditions/antenna3", "usv5/health_DEBUG/sensor_conditions/sensor1", "usv5/health_DEBUG/sensor_conditions/sensor2", "usv5/health_DEBUG/sensor_conditions/sensor3", "usv5/health_DEBUG/battery_level"]
+usv6 = ["usv6", "usv6/health_DEBUG", "usv6/mission_DEBUG", "usv6/mission_DEBUG/mission_log", "usv6/mission_DEBUG/route", "usv6/mission_DEBUG/antennas", "usv6/mission_DEBUG/antennas/antenna1", "usv6/mission_DEBUG/antennas/antenna2", "usv6/mission_DEBUG/antennas/antenna3", "usv6/mission_DEBUG/sensors", "usv6/mission_DEBUG/sensors/sensor1", "usv6/mission_DEBUG/sensors/sensor2", "usv6/mission_DEBUG/sensors/sensor3", "usv6/mission_DEBUG/location", "usv6/health_DEBUG/log", "usv6/health_DEBUG/antenna_conditions/antenna1", "usv6/health_DEBUG/antenna_conditions/antenna2", "usv6/health_DEBUG/antenna_conditions/antenna3", "usv6/health_DEBUG/sensor_conditions/sensor1", "usv6/health_DEBUG/sensor_conditions/sensor2", "usv6/health_DEBUG/sensor_conditions/sensor3", "usv6/health_DEBUG/battery_level"]
 
 #2D list with a list of name lists ordered by node id
 node_names = []
@@ -850,9 +851,11 @@ logging.info("Average cache hit ratio: %s", total/length)
 
 #log the average hit distance
 logging.info("Average hit distance: %s", statistics.mean(hit_distances))
+logging.info("Hit distance variance across all interests: %s", statistics.variance(hit_distances))
 
 #log the average return time
 logging.info("Average return time: %s", statistics.mean(return_times))
+logging.info("Return time variance across all interests: %s", statistics.variance(return_times))
 
 logging.info("Percent 1: %s", 100*hit_distances.count(1)/len(hit_distances))
 logging.info("Percent 2: %s", 100*hit_distances.count(2)/len(hit_distances))
@@ -860,11 +863,13 @@ logging.info("Percent 3: %s", 100*hit_distances.count(3)/len(hit_distances))
 logging.info("Percent 4: %s", 100*hit_distances.count(4)/len(hit_distances))
 logging.info("Percent 5: %s", 100*hit_distances.count(5)/len(hit_distances))
 
+
 hd_averages = []
 for i in range(0, len(hd_indexes) - 1):
     hd_averages.append(statistics.mean(hit_distances[hd_indexes[i]+1:hd_indexes[i+1]+1]))
 
 hd_averages.append(statistics.mean(hit_distances[hd_indexes[len(hd_indexes)-1]+1:]))
+logging.info("Hit distance variance across average hit distance of samples: %s", statistics.variance(hd_averages))
 
 
 rt_averages = []
@@ -872,6 +877,7 @@ for i in range(0, len(rt_indexes) - 1):
     rt_averages.append(statistics.mean(return_times[rt_indexes[i]+1:rt_indexes[i+1]+1]))
 
 rt_averages.append(statistics.mean(return_times[rt_indexes[len(rt_indexes)-1]+1:]))
+logging.info("Return time variance across average return time of samples: %s", statistics.variance(rt_averages))
 
 
 seaborn.histplot(hd_averages)

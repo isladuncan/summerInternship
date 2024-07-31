@@ -5,7 +5,10 @@ def graph_configuration():
     """Sets up networkx graph and some node/channel attributes."""
 
     G = nx.Graph()
+    # List contains node ids.
     nodes = [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13]
+
+    # Holds information for channels which are not part of the graph.
     edge_channels = []
 
     G.add_nodes_from(nodes)
@@ -25,12 +28,12 @@ def graph_configuration():
     G.add_edge(11, 12, id = 15, length = 1000)
     G.add_edge(12, 13, id = 16, length = 1000)
 
-    # Edge channels are not included in the graph, since they are only connected to one node on the edges of the graph.
-    # Format for edge channel list: [id, node channel is connected to, length]
+    # Edge channels are only connected to one node.
     edge_channels.append({"id": 0, "node": 0})
     edge_channels.append({"id": 4, "node": 3})
     edge_channels.append({"id": 8, "node": 6})
     edge_channels.append({"id": 12, "node": 9})
+    
     for x in edge_channels:
         x["length"] = random.randint(500, 2000)
 

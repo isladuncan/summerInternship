@@ -9,27 +9,32 @@ import logging
 import statistics
 import pylint
 import network
+import csv
+import datetime
 
 logging.basicConfig(level = logging.INFO)
 
 # User-set variables for simulation.
+
+# Probability that data will be cached when caching through the CS.
 PROB = 1
 
+# Max size of a CS. 
 CACHE_SIZE = 5
 
+# Constants used to calculate delay in channrels.
 BANDWIDTH = 100000000
 SIGNAL_SPEED = 1500
-# When delay is calculated, variance will be added as a random float in 
-# the range of (-DELAY_VARIANCE, DELAY_VARIANCE).
+# Range for random negative or positive variance in delay.
 DELAY_VARIANCE = 0.5
 
 # Data expires at different times depending on the importance.
-# Here the time health DEBUGrmation and mission DEBUGrmation can be cached 
-# in a CS is pre-defined.
+# Health information expire time in seconds.
 HI_EXPIRE_TIME = 500
+# Mission information expire time in seconds.
 MI_EXPIRE_TIME = 30
 
-SAMPLES = 100
+SAMPLES = 10000
 RUN_TIME = 1000
 
 
@@ -44,8 +49,7 @@ class ContentStore(object):
 
     def __init__(self, env, max, content, node_id):
         self.env = env
-        # Currently CS size for all nodes is the same pre-defined constant, but 
-        # there is a potential for CS stores to have different sizes.
+        # max_size is currently is defined by CACHE_SIZE.
         self.max_size = max
         self.content = content
         self.node_id = node_id
@@ -58,8 +62,7 @@ class ContentStore(object):
         
         Returns: boolean"""
 
-        # CS tries to find data name requested by interest, which also 
-        # must not be expired.
+        # CS searches for data name, which also must not be expired.
         for d in self.content:
             if interest.data_name == d.name and d.expire_time > self.env.now:
                 logging.debug("Data: %s found in Content Store", interest.data_name)
@@ -78,20 +81,28 @@ class ContentStore(object):
 
         # First remove all the expired data.
         for d in self.content:
+
             if d.expire_time < self.env.now:
                 self.content.remove(d)
                 logging.debug("%s has expired and has been removed", d.name)
 
-        # CS will cache new data with pre-defined probability PROB.
         numb = random.random()
+
+        # CS will cache new data with pre-defined probability PROB.
         if numb < PROB:
             cache_status[data.name] += 1
             self.content.insert(0, data)
+            
+            # If size is too large, data will chosen to be removed.
             if len(self.content) > self.max_size:
+                # The least desirable data will be set to the first entry.
+                # The data's popularity will be used in its "score"
                 if self.content[0].name in nodes[self.node_id].data_popularity:
+
                     min_score = nodes[self.node_id].data_popularity[
-                        self.content[0].name]*(self.content[0].expire_time-self.env.now)
-                    
+                        self.content[0].name]*(self.content[0].expire_time
+                                               -self.env.now)
+                # If popularity is not tracked by node, the score is 0.
                 else:
                     min_score = 0
 
@@ -125,7 +136,7 @@ class ContentStore(object):
         interest -- Interest object representing the request"""
 
         # Create new data object when responding with data.
-        data = Data(self.env, interest.id, interest.data_name)
+        data = Data(self.env, interest.data_name)
         logging.debug("Responding with data: %s to channel %s", 
                      interest.data_name, channel_id)
         yield self.env.process(channels[channel_id].forward_data(data, interest, self.node_id))
@@ -141,8 +152,10 @@ class PendingInterest(object):
 
     def __init__(self, env, max):
         self.env = env
-        # max_size hasn't been used yet, but is a consideration for later.
+        # max_size isn't currently being used for size management
         self.max_size = max
+        # Dictionary with data names as keys and dictionaries as values.
+        # The values are interest objects corresponding with channel ids.
         self.content = {}
 
     def search(self, interest):
@@ -153,15 +166,15 @@ class PendingInterest(object):
         interest -- Interest object representing the request
         
         Returns: boolean"""
-    
+
+        # Check if the node has already forwarded a request for the data.
         if interest.data_name in self.content:
             logging.debug("Data: %s found in Pending Interest Table", interest.data_name)
-            # Return true if the node has already forwarded an interest for 
-            # the data requested.
+            # Return True if found.
             return True
         
         logging.debug("Data: %s not found in Pending Interest Table", interest.data_name)
-        # Otherwise, return false.
+        # Otherwise, return False.
         return False
     
     def add_name(self, interest, fromId):
@@ -171,10 +184,6 @@ class PendingInterest(object):
         interest -- Interest object representing the request
         fromId -- int, id for the channel the interest came through"""
 
-        # PIT is a dictionary with data names as keys and 
-        # more dictionaries as the values.
-        # Internal dictionaries have the interest objects as values and the 
-        # channels which sent the interests as keys.
         self.content[interest.data_name] = {interest: fromId}
         logging.debug("Data: %s added to Pending Interest Table", interest.data_name)
 
@@ -186,15 +195,12 @@ class PendingInterest(object):
         interest -- Interest object representing the request
         fromId -- int, the channel id the interest came from"""
 
-        # If the requested data has already been requested, the interest will be 
-        # dropped and the interest object and the channel which sent it will be 
-        # added to the value for the key matching the data name.
         self.content[interest.data_name][interest] = fromId
         logging.debug("Interface: %s added to %s in Pending Interest Table", 
                      fromId, interest.data_name)
         
     def remove(self, data_name):
-        """Removes entry in PIT, called when the node receives the data.
+        """Removes entry in PIT; called when the node receives the data.
         
         Arguments:
         data_name -- String which corresponds to the name of the data"""
@@ -204,7 +210,7 @@ class PendingInterest(object):
 
 
 class ForwardingBase(object):
-    """Represents the Forwarding DEBUGrmation Base (FIB) of a node and 
+    """Represents the Forwarding Information Base (FIB) of a node and 
     its functions.
     
     Arguments:
@@ -214,6 +220,7 @@ class ForwardingBase(object):
 
     def __init__(self, env, interfaces, node_id):
         self.env = env
+        # Dictionary with data names corresponding to channel ids.
         self.content = interfaces
         self.node_id = node_id
 
@@ -225,10 +232,10 @@ class ForwardingBase(object):
 
         logging.debug("Sending request for %s to Channel: %s", interest.data_name, 
                      self.content[interest.data_name])
-        # When a request is sent, the FIB will check its content for which 
-        # channel to forward the interest to based on the data being requested.
+        # FIB uses content to find the channel to forward the request to.
         yield self.env.process(
-            channels[self.content[interest.data_name]].forward_interest(interest, self.node_id))
+            channels[self.content[interest.data_name]].forward_interest(
+                interest, self.node_id))
         
 
 class Channel(object):
@@ -256,28 +263,24 @@ class Channel(object):
         # delay = propagation delay + transmission delay +/- variance
         delay = self.length/SIGNAL_SPEED + interest.size/BANDWIDTH 
         + random.uniform(-DELAY_VARIANCE, DELAY_VARIANCE)
+
         # delay must not be less than a minimum value, here 0.01.
         if delay < 0.01:
             delay = 0.01
 
         yield self.env.timeout(delay)
 
-        # The channel determines which node to forward the interest too based on 
-        # the node it came from.
+        # The channel determines which node to forward the interest to.
         if self.nodes[0] == node_id:
             rnode_id = self.nodes[1]
 
         else:
             rnode_id = self.nodes[0]
 
-        # The node the interest is being forwarded to should not have an id of 
-        # -1, since these are users which do not have defined nodes in 
-        # this simulation.
-        if rnode_id != -1:
-            logging.debug("Channel %s forwarding request for %s to %s", self.id, 
-                         interest.data_name, rnode_id)
-            # Put the interest in the channel's store in the node.
-            nodes[rnode_id].stores[self.id].put(interest)
+        logging.debug("Channel %s forwarding request for %s to %s", self.id, 
+                        interest.data_name, rnode_id)
+        # Put the interest in the channel's store in the node.
+        nodes[rnode_id].stores[self.id].put(interest)
 
     def forward_data(self, data, interest, node_id):
         """Puts data object in the store of receiving node.
@@ -290,28 +293,26 @@ class Channel(object):
         # delay = propagation delay + transmission delay +/- variance
         delay = self.length/SIGNAL_SPEED + data.size/BANDWIDTH 
         + random.uniform(-DELAY_VARIANCE, DELAY_VARIANCE)
+
         # delay must not be less than a minimum value, here 0.01.
         if delay < 0.01:
             delay = 0.01
 
         yield self.env.timeout(delay)
 
-        # The channel determines which node to forward the data too based on the 
-        # node it came from.
+        # The channel determines which node to forward the data to.
         if self.nodes[0] == node_id:
             rnode_id = self.nodes[1]
 
         else:
             rnode_id = self.nodes[0]
 
-        # If the node the data is being forwarded to has an id of -1, the 
-        # channel is returning the data back to the original user who requested 
-        # it, and the process is over for the interest.
+        # Nodes with ids of -1 represent requesting users.
+        # If the receiving node id = 1, the request is being satisfied.
         if rnode_id == -1:
             logging.debug("Returning data: %s to user", data.name)
             # Calculate and log how long it took to satisfy the interest.
             return_time = self.env.now - interest.creation_time
-            logging.debug("...took %s units", return_time)
             return_times.append(return_time)
 
         else:
@@ -333,6 +334,7 @@ class Interest(object):
         self.id = id
         self.data_name = name
         self.creation_time = self.env.now
+        # Currently all interest packets are the same size.
         self.size = 1000
 
 
@@ -344,17 +346,15 @@ class Data(object):
     id -- int, the id the data is assigned to
     name -- String, name of data being packaged"""
 
-    def __init__(self, env, id, name):
+    def __init__(self, env, name):
         self.env = env
-        self.id = id
         self.name = name
-        # Size of data packet has an inverse relationship with the specificity 
-        # of the data.
+        # Size of data is variable.
         self.size = 2000 + random.uniform(-200, 200)
-        #self.size = 40 + 524280/(name.count('/') + 1)
+
         self.send_time = self.env.now
-        # The time the data expires is determined based on the type of data
-        if "health_DEBUG" in self.name:
+        # The time the data expires is determined based on importance.
+        if "health_info" in self.name:
             self.expire_time = self.send_time + HI_EXPIRE_TIME
 
         else:
@@ -380,27 +380,28 @@ class Node(object):
         self.id = id
         self.name = name
 
-        # dictionary of stores (simpy resources) for interests and data being 
-        # forwarded to the node
+        # Dictionary of stores (simpy resources) for interests received.
         self.stores = {}
+        # Dictionary of stores (simpy resources) for data received.
         self.data_stores = {}
+
         self.channel_ids = channel_ids
-        # in the stores and data_stores dictionaries, the keys are the channel 
-        # ids and the values are simpy stores
+        # Each channel is a value which corresponds to its own store.
         for x in channel_ids:
             self.stores[x] = simpy.Store(env)
             self.data_stores[x] = simpy.Store(env)
 
-        # creating instances of the three main parts of each node
+        # Creating instances of the three main parts of each node.
         self.content_store = ContentStore(self.env, cssize, cscontent, self.id)
         self.pending_interest = PendingInterest(self.env, pisize)
         self.forwarding_base = ForwardingBase(self.env, fbdata, self.id)
+
+        # Dictionary which has data corresponding with times requested.
         self.data_popularity = {}
 
-        # cache_hits keeps track of how many times a node finds requested data in 
-        # its content store, and total_requests keeps track of the total interests 
-        # which pass through the node
+        # Keeps track of how many times a node finds requested data in its CS.
         self.cache_hits = 0
+        # Keeps track of how many total interests pass through the node.
         self.total_requests = 0
 
     def search_interests(self, storeNum):
@@ -411,11 +412,9 @@ class Node(object):
         storeNum: int, the id of the channel associated with the store"""
 
         while True:
-            # If there is nothing in the store, the function will stop and move on 
-            # to the next store to search.
+            # Function will stop if yield returns nothing.
             intrst = yield self.stores[storeNum].get()
-            # If the function keeps running, there is an interest in the store, and 
-            # it will be sent to the receive_request() method.
+            # If the function continues, the node receives the request.
             yield self.env.process(self.receive_request(intrst, storeNum))
 
     def search_data(self, storeNum):
@@ -426,16 +425,14 @@ class Node(object):
         storeNum: int, the id of the channel associated with the store"""
 
         while True:
-            # if the method is searching the store for the last channel in the list, 
-            # the channel_ids list will be shuffled for the next time so as not 
-            # to be biased towards the first channel
+            # If checking the last channel, the list will be shuffled.
+            # This ensures the node is not biased towards one channel.
             if storeNum == self.channel_ids[len(self.channel_ids) - 1]:
                 random.shuffle(self.channel_ids)
-            # if there is nothing in the store, the function will stop and move on 
-            # to the next store to search
+
+            # Function will stop if yield returns nothing
             data = yield self.data_stores[storeNum].get()
-            # if the function keeps running, there is a data packet in the store, 
-            # and it will be sent to the receive_data() method
+            # If the function continues, the node receives the data.
             yield self.env.process(self.receive_data(data))
 
     def receive_request(self, interest, fromchannel_id):
@@ -446,9 +443,9 @@ class Node(object):
         fromchannel_id -- id of channel interest came from"""
 
         logging.debug("Node %s receiving request for %s", self.id, interest.data_name)
-        # the node's total hits goes up by one when receiving an interest, 
-        # and the hit distance for that interest also goes up by one
+        # total_hits goes up by one when receiving an interest.
         self.total_requests += 1
+        # The interest's hit distance also goes up by one.
         hit_distances[interest.id] += 1
 
         if interest.data_name in self.data_popularity:
@@ -457,11 +454,11 @@ class Node(object):
         else:
             self.data_popularity[interest.data_name] = 1
 
-        # below checks if the node is the producer for the data requested, 
-        # if so, it creates a data packet and sends it back
+        # Check if the node is the producer for the data requested. 
         if interest.data_name.startswith(self.name):
+            # If it is the producer, create data packet and send it back.
             logging.debug("%s receiving request for %s", self.name, interest.data_name)
-            data = Data(self.env, interest.id, interest.data_name)
+            data = Data(self.env, interest.data_name)
             logging.debug("Responding with data: %s to channel %s", 
                          interest.data_name, fromchannel_id)
             yield self.env.process(channels[fromchannel_id].forward_data(data, interest, 
@@ -473,9 +470,6 @@ class Node(object):
             logging.debug("Going to respond with data...")
             # cache hits goes up by one
             self.cache_hits += 1
-            # a hit occurs on the cache hits timeline graph
-            hits.append(1)
-            times.append(self.env.now)
             yield self.env.process(self.content_store.send_data(fromchannel_id, 
                                                                      interest))
             
@@ -499,7 +493,7 @@ class Node(object):
 
         logging.debug("Node %s receiving data: %s", self.id, data.name)
 
-        # the intrsts and channel_ids lists hold the important DEBUGrmation for 
+        # the intrsts and channel_ids lists hold the important information for 
         # forwarding the data
         # entries in these lists with the same index are connected
         intrsts = []
@@ -526,74 +520,62 @@ def interest_arrival():
     """Creates interest objects and sends them through random 
     edge channels."""
 
-    # interest id starts at 0
+    # Interest ids start at 0
     interest_id = 0
+
+    # Create the list of edge channels to send interests through.
     channel_ids = []
     for e in edge_channels:
         channel_ids.append(e["id"])
-    # below is an alternate generating pattern which sends requests for the 
-    # same data through the same interface twice
-    # name = names[random.randint(0, len(names))-1]
-    # interest = Interest(env, interest_id, name)
-    # hit_distances.append(0)
-    # logging.debug("About to send request for %s", interest.data_name)
-    # yield env.process(channels[0].forward_interest(interest, -1))
-    # yield env.timeout(0.5)
-    # interest_id = 1
-    # interest = Interest(env, interest_id, name)
-    # hit_distances.append(0)
-    # logging.debug("About to send request for %s", interest.data_name)
-    # yield env.process(channels[0].forward_interest(interest, -1))
-    # below is the looping version of the interest generator
+    
     while True:
-        # Interest arrival follows an exponential distribution
         yield env.timeout(random.uniform(0.5, 1.5))  
 
         if random.random() < 0.3:
             nodenum = 13
 
         else:
-            # generate a random data producer to request data from
+            # Generate a random data producer to request data from.
             nodenum = random.randint(0, len(node_names)-1) 
 
-        # below the specific data name is specified while creating the interest
-        interest = Interest(env, interest_id, node_names[nodenum][random.randint(0, 
-                                                                                len(node_names[nodenum])-1)])
+        # Below the data name is specified while creating the interest.
+        interest = Interest(env, interest_id, 
+                            node_names[nodenum][
+                                random.randint(0, len(node_names[nodenum])-1)])
         
-        #creating new entry in hit distances list
+        # Create a new entry in hit distances list.
         hit_distances.append(0)
 
         logging.debug("About to send request for %s", interest.data_name)
-        #new interests will be sent through random edge channel
+        # New interests will be sent through random edge channel.
         yield env.process(channels[random.choice(channel_ids)].forward_interest(interest, -1))
         interest_id += 1
 
 env = simpy.Environment()
 
-# lists for nodes and channels keep track of Node and Channel objects 
-# ordered by id
+# Lists for nodes and channels keep track of Node and Channel objects.
 nodes = []
 channels = []
 
-#defining data names for each data-producing node
-uuv_names = ["uuv", "uuv/health_DEBUG", "uuv/mission_DEBUG", "uuv/mission_DEBUG/mission_log", "uuv/mission_DEBUG/route", "uuv/mission_DEBUG/antennas", "uuv/mission_DEBUG/antennas/antenna1", "uuv/mission_DEBUG/antennas/antenna2", "uuv/mission_DEBUG/antennas/antenna3", "uuv/mission_DEBUG/sensors", "uuv/mission_DEBUG/sensors/sensor1", "uuv/mission_DEBUG/sensors/sensor2", "uuv/mission_DEBUG/sensors/sensor3", "uuv/mission_DEBUG/location", "uuv/mission_DEBUG/depth", "uuv/health_DEBUG/log", "uuv/health_DEBUG/antenna_conditions/antenna1", "uuv/health_DEBUG/antenna_conditions/antenna2", "uuv/health_DEBUG/antenna_conditions/antenna3", "uuv/health_DEBUG/sensor_conditions/sensor1", "uuv/health_DEBUG/sensor_conditions/sensor2", "uuv/health_DEBUG/sensor_conditions/sensor3", "uuv/health_DEBUG/battery_level"]
-uuv1 = ["uuv1", "uuv1/health_DEBUG", "uuv1/mission_DEBUG", "uuv1/mission_DEBUG/mission_log", "uuv1/mission_DEBUG/route", "uuv1/mission_DEBUG/antennas", "uuv1/mission_DEBUG/antennas/antenna1", "uuv1/mission_DEBUG/antennas/antenna2", "uuv1/mission_DEBUG/antennas/antenna3", "uuv1/mission_DEBUG/sensors", "uuv1/mission_DEBUG/sensors/sensor1", "uuv1/mission_DEBUG/sensors/sensor2", "uuv1/mission_DEBUG/sensors/sensor3", "uuv1/mission_DEBUG/location", "uuv1/mission_DEBUG/depth", "uuv1/health_DEBUG/log", "uuv1/health_DEBUG/antenna_conditions/antenna1", "uuv1/health_DEBUG/antenna_conditions/antenna2", "uuv1/health_DEBUG/antenna_conditions/antenna3", "uuv1/health_DEBUG/sensor_conditions/sensor1", "uuv1/health_DEBUG/sensor_conditions/sensor2", "uuv1/health_DEBUG/sensor_conditions/sensor3", "uuv1/health_DEBUG/battery_level"]
-uuv2 = ["uuv2", "uuv2/health_DEBUG", "uuv2/mission_DEBUG", "uuv2/mission_DEBUG/mission_log", "uuv2/mission_DEBUG/route", "uuv2/mission_DEBUG/antennas", "uuv2/mission_DEBUG/antennas/antenna1", "uuv2/mission_DEBUG/antennas/antenna2", "uuv2/mission_DEBUG/antennas/antenna3", "uuv2/mission_DEBUG/sensors", "uuv2/mission_DEBUG/sensors/sensor1", "uuv2/mission_DEBUG/sensors/sensor2", "uuv2/mission_DEBUG/sensors/sensor3", "uuv2/mission_DEBUG/location", "uuv2/mission_DEBUG/depth", "uuv2/health_DEBUG/log", "uuv2/health_DEBUG/antenna_conditions/antenna1", "uuv2/health_DEBUG/antenna_conditions/antenna2", "uuv2/health_DEBUG/antenna_conditions/antenna3", "uuv2/health_DEBUG/sensor_conditions/sensor1", "uuv2/health_DEBUG/sensor_conditions/sensor2", "uuv2/health_DEBUG/sensor_conditions/sensor3", "uuv2/health_DEBUG/battery_level"]
-uuv3 = ["uuv3", "uuv3/health_DEBUG", "uuv3/mission_DEBUG", "uuv3/mission_DEBUG/mission_log", "uuv3/mission_DEBUG/route", "uuv3/mission_DEBUG/antennas", "uuv3/mission_DEBUG/antennas/antenna1", "uuv3/mission_DEBUG/antennas/antenna2", "uuv3/mission_DEBUG/antennas/antenna3", "uuv3/mission_DEBUG/sensors", "uuv3/mission_DEBUG/sensors/sensor1", "uuv3/mission_DEBUG/sensors/sensor2", "uuv3/mission_DEBUG/sensors/sensor3", "uuv3/mission_DEBUG/location", "uuv3/mission_DEBUG/depth", "uuv3/health_DEBUG/log", "uuv3/health_DEBUG/antenna_conditions/antenna1", "uuv3/health_DEBUG/antenna_conditions/antenna2", "uuv3/health_DEBUG/antenna_conditions/antenna3", "uuv3/health_DEBUG/sensor_conditions/sensor1", "uuv3/health_DEBUG/sensor_conditions/sensor2", "uuv3/health_DEBUG/sensor_conditions/sensor3", "uuv3/health_DEBUG/battery_level"]
-uuv4 = ["uuv4", "uuv4/health_DEBUG", "uuv4/mission_DEBUG", "uuv4/mission_DEBUG/mission_log", "uuv4/mission_DEBUG/route", "uuv4/mission_DEBUG/antennas", "uuv4/mission_DEBUG/antennas/antenna1", "uuv4/mission_DEBUG/antennas/antenna2", "uuv4/mission_DEBUG/antennas/antenna3", "uuv4/mission_DEBUG/sensors", "uuv4/mission_DEBUG/sensors/sensor1", "uuv4/mission_DEBUG/sensors/sensor2", "uuv4/mission_DEBUG/sensors/sensor3", "uuv4/mission_DEBUG/location", "uuv4/mission_DEBUG/depth", "uuv4/health_DEBUG/log", "uuv4/health_DEBUG/antenna_conditions/antenna1", "uuv4/health_DEBUG/antenna_conditions/antenna2", "uuv4/health_DEBUG/antenna_conditions/antenna3", "uuv4/health_DEBUG/sensor_conditions/sensor1", "uuv4/health_DEBUG/sensor_conditions/sensor2", "uuv4/health_DEBUG/sensor_conditions/sensor3", "uuv4/health_DEBUG/battery_level"]
-uuv5 = ["uuv5", "uuv5/health_DEBUG", "uuv5/mission_DEBUG", "uuv5/mission_DEBUG/mission_log", "uuv5/mission_DEBUG/route", "uuv5/mission_DEBUG/antennas", "uuv5/mission_DEBUG/antennas/antenna1", "uuv5/mission_DEBUG/antennas/antenna2", "uuv5/mission_DEBUG/antennas/antenna3", "uuv5/mission_DEBUG/sensors", "uuv5/mission_DEBUG/sensors/sensor1", "uuv5/mission_DEBUG/sensors/sensor2", "uuv5/mission_DEBUG/sensors/sensor3", "uuv5/mission_DEBUG/location", "uuv5/mission_DEBUG/depth", "uuv5/health_DEBUG/log", "uuv5/health_DEBUG/antenna_conditions/antenna1", "uuv5/health_DEBUG/antenna_conditions/antenna2", "uuv5/health_DEBUG/antenna_conditions/antenna3", "uuv5/health_DEBUG/sensor_conditions/sensor1", "uuv5/health_DEBUG/sensor_conditions/sensor2", "uuv5/health_DEBUG/sensor_conditions/sensor3", "uuv5/health_DEBUG/battery_level"]
-uuv6 = ["uuv6", "uuv6/health_DEBUG", "uuv6/mission_DEBUG", "uuv6/mission_DEBUG/mission_log", "uuv6/mission_DEBUG/route", "uuv6/mission_DEBUG/antennas", "uuv6/mission_DEBUG/antennas/antenna1", "uuv6/mission_DEBUG/antennas/antenna2", "uuv6/mission_DEBUG/antennas/antenna3", "uuv6/mission_DEBUG/sensors", "uuv6/mission_DEBUG/sensors/sensor1", "uuv6/mission_DEBUG/sensors/sensor2", "uuv6/mission_DEBUG/sensors/sensor3", "uuv6/mission_DEBUG/location", "uuv6/mission_DEBUG/depth", "uuv6/health_DEBUG/log", "uuv6/health_DEBUG/antenna_conditions/antenna1", "uuv6/health_DEBUG/antenna_conditions/antenna2", "uuv6/health_DEBUG/antenna_conditions/antenna3", "uuv6/health_DEBUG/sensor_conditions/sensor1", "uuv6/health_DEBUG/sensor_conditions/sensor2", "uuv6/health_DEBUG/sensor_conditions/sensor3", "uuv6/health_DEBUG/battery_level"]
-uuv7 = ["uuv7", "uuv7/health_DEBUG", "uuv7/mission_DEBUG", "uuv7/mission_DEBUG/mission_log", "uuv7/mission_DEBUG/route", "uuv7/mission_DEBUG/antennas", "uuv7/mission_DEBUG/antennas/antenna1", "uuv7/mission_DEBUG/antennas/antenna2", "uuv7/mission_DEBUG/antennas/antenna3", "uuv7/mission_DEBUG/sensors", "uuv7/mission_DEBUG/sensors/sensor1", "uuv7/mission_DEBUG/sensors/sensor2", "uuv7/mission_DEBUG/sensors/sensor3", "uuv7/mission_DEBUG/location", "uuv7/mission_DEBUG/depth", "uuv7/health_DEBUG/log", "uuv7/health_DEBUG/antenna_conditions/antenna1", "uuv7/health_DEBUG/antenna_conditions/antenna2", "uuv7/health_DEBUG/antenna_conditions/antenna3", "uuv7/health_DEBUG/sensor_conditions/sensor1", "uuv7/health_DEBUG/sensor_conditions/sensor2", "uuv7/health_DEBUG/sensor_conditions/sensor3", "uuv7/health_DEBUG/battery_level"]
-uuv8 = ["uuv8", "uuv8/health_DEBUG", "uuv8/mission_DEBUG", "uuv8/mission_DEBUG/mission_log", "uuv8/mission_DEBUG/route", "uuv8/mission_DEBUG/antennas", "uuv8/mission_DEBUG/antennas/antenna1", "uuv8/mission_DEBUG/antennas/antenna2", "uuv8/mission_DEBUG/antennas/antenna3", "uuv8/mission_DEBUG/sensors", "uuv8/mission_DEBUG/sensors/sensor1", "uuv8/mission_DEBUG/sensors/sensor2", "uuv8/mission_DEBUG/sensors/sensor3", "uuv8/mission_DEBUG/location", "uuv8/mission_DEBUG/depth", "uuv8/health_DEBUG/log", "uuv8/health_DEBUG/antenna_conditions/antenna1", "uuv8/health_DEBUG/antenna_conditions/antenna2", "uuv8/health_DEBUG/antenna_conditions/antenna3", "uuv8/health_DEBUG/sensor_conditions/sensor1", "uuv8/health_DEBUG/sensor_conditions/sensor2", "uuv8/health_DEBUG/sensor_conditions/sensor3", "uuv8/health_DEBUG/battery_level"]
-usv_names = ["usv", "usv/health_DEBUG", "usv/mission_DEBUG", "usv/mission_DEBUG/mission_log", "usv/mission_DEBUG/route", "usv/mission_DEBUG/antennas", "usv/mission_DEBUG/antennas/antenna1", "usv/mission_DEBUG/antennas/antenna2", "usv/mission_DEBUG/antennas/antenna3", "usv/mission_DEBUG/sensors", "usv/mission_DEBUG/sensors/sensor1", "usv/mission_DEBUG/sensors/sensor2", "usv/mission_DEBUG/sensors/sensor3", "usv/mission_DEBUG/location", "usv/health_DEBUG/log", "usv/health_DEBUG/antenna_conditions/antenna1", "usv/health_DEBUG/antenna_conditions/antenna2", "usv/health_DEBUG/antenna_conditions/antenna3", "usv/health_DEBUG/sensor_conditions/sensor1", "usv/health_DEBUG/sensor_conditions/sensor2", "usv/health_DEBUG/sensor_conditions/sensor3", "usv/health_DEBUG/battery_level"]
-usv1 = ["usv1", "usv1/health_DEBUG", "usv1/mission_DEBUG", "usv1/mission_DEBUG/mission_log", "usv1/mission_DEBUG/route", "usv1/mission_DEBUG/antennas", "usv1/mission_DEBUG/antennas/antenna1", "usv1/mission_DEBUG/antennas/antenna2", "usv1/mission_DEBUG/antennas/antenna3", "usv1/mission_DEBUG/sensors", "usv1/mission_DEBUG/sensors/sensor1", "usv1/mission_DEBUG/sensors/sensor2", "usv1/mission_DEBUG/sensors/sensor3", "usv1/mission_DEBUG/location", "usv1/health_DEBUG/log", "usv1/health_DEBUG/antenna_conditions/antenna1", "usv1/health_DEBUG/antenna_conditions/antenna2", "usv1/health_DEBUG/antenna_conditions/antenna3", "usv1/health_DEBUG/sensor_conditions/sensor1", "usv1/health_DEBUG/sensor_conditions/sensor2", "usv1/health_DEBUG/sensor_conditions/sensor3", "usv1/health_DEBUG/battery_level"]
-usv2 = ["usv2", "usv2/health_DEBUG", "usv2/mission_DEBUG", "usv2/mission_DEBUG/mission_log", "usv2/mission_DEBUG/route", "usv2/mission_DEBUG/antennas", "usv2/mission_DEBUG/antennas/antenna1", "usv2/mission_DEBUG/antennas/antenna2", "usv2/mission_DEBUG/antennas/antenna3", "usv2/mission_DEBUG/sensors", "usv2/mission_DEBUG/sensors/sensor1", "usv2/mission_DEBUG/sensors/sensor2", "usv2/mission_DEBUG/sensors/sensor3", "usv2/mission_DEBUG/location", "usv2/health_DEBUG/log", "usv2/health_DEBUG/antenna_conditions/antenna1", "usv2/health_DEBUG/antenna_conditions/antenna2", "usv2/health_DEBUG/antenna_conditions/antenna3", "usv2/health_DEBUG/sensor_conditions/sensor1", "usv2/health_DEBUG/sensor_conditions/sensor2", "usv2/health_DEBUG/sensor_conditions/sensor3", "usv2/health_DEBUG/battery_level"]
-usv3 = ["usv3", "usv3/health_DEBUG", "usv3/mission_DEBUG", "usv3/mission_DEBUG/mission_log", "usv3/mission_DEBUG/route", "usv3/mission_DEBUG/antennas", "usv3/mission_DEBUG/antennas/antenna1", "usv3/mission_DEBUG/antennas/antenna2", "usv3/mission_DEBUG/antennas/antenna3", "usv3/mission_DEBUG/sensors", "usv3/mission_DEBUG/sensors/sensor1", "usv3/mission_DEBUG/sensors/sensor2", "usv3/mission_DEBUG/sensors/sensor3", "usv3/mission_DEBUG/location", "usv3/health_DEBUG/log", "usv3/health_DEBUG/antenna_conditions/antenna1", "usv3/health_DEBUG/antenna_conditions/antenna2", "usv3/health_DEBUG/antenna_conditions/antenna3", "usv3/health_DEBUG/sensor_conditions/sensor1", "usv3/health_DEBUG/sensor_conditions/sensor2", "usv3/health_DEBUG/sensor_conditions/sensor3", "usv3/health_DEBUG/battery_level"]
-usv4 = ["usv4", "usv4/health_DEBUG", "usv4/mission_DEBUG", "usv4/mission_DEBUG/mission_log", "usv4/mission_DEBUG/route", "usv4/mission_DEBUG/antennas", "usv4/mission_DEBUG/antennas/antenna1", "usv4/mission_DEBUG/antennas/antenna2", "usv4/mission_DEBUG/antennas/antenna3", "usv4/mission_DEBUG/sensors", "usv4/mission_DEBUG/sensors/sensor1", "usv4/mission_DEBUG/sensors/sensor2", "usv4/mission_DEBUG/sensors/sensor3", "usv4/mission_DEBUG/location", "usv4/health_DEBUG/log", "usv4/health_DEBUG/antenna_conditions/antenna1", "usv4/health_DEBUG/antenna_conditions/antenna2", "usv4/health_DEBUG/antenna_conditions/antenna3", "usv4/health_DEBUG/sensor_conditions/sensor1", "usv4/health_DEBUG/sensor_conditions/sensor2", "usv4/health_DEBUG/sensor_conditions/sensor3", "usv4/health_DEBUG/battery_level"]
-usv5 = ["usv5", "usv5/health_DEBUG", "usv5/mission_DEBUG", "usv5/mission_DEBUG/mission_log", "usv5/mission_DEBUG/route", "usv5/mission_DEBUG/antennas", "usv5/mission_DEBUG/antennas/antenna1", "usv5/mission_DEBUG/antennas/antenna2", "usv5/mission_DEBUG/antennas/antenna3", "usv5/mission_DEBUG/sensors", "usv5/mission_DEBUG/sensors/sensor1", "usv5/mission_DEBUG/sensors/sensor2", "usv5/mission_DEBUG/sensors/sensor3", "usv5/mission_DEBUG/location", "usv5/health_DEBUG/log", "usv5/health_DEBUG/antenna_conditions/antenna1", "usv5/health_DEBUG/antenna_conditions/antenna2", "usv5/health_DEBUG/antenna_conditions/antenna3", "usv5/health_DEBUG/sensor_conditions/sensor1", "usv5/health_DEBUG/sensor_conditions/sensor2", "usv5/health_DEBUG/sensor_conditions/sensor3", "usv5/health_DEBUG/battery_level"]
-usv6 = ["usv6", "usv6/health_DEBUG", "usv6/mission_DEBUG", "usv6/mission_DEBUG/mission_log", "usv6/mission_DEBUG/route", "usv6/mission_DEBUG/antennas", "usv6/mission_DEBUG/antennas/antenna1", "usv6/mission_DEBUG/antennas/antenna2", "usv6/mission_DEBUG/antennas/antenna3", "usv6/mission_DEBUG/sensors", "usv6/mission_DEBUG/sensors/sensor1", "usv6/mission_DEBUG/sensors/sensor2", "usv6/mission_DEBUG/sensors/sensor3", "usv6/mission_DEBUG/location", "usv6/health_DEBUG/log", "usv6/health_DEBUG/antenna_conditions/antenna1", "usv6/health_DEBUG/antenna_conditions/antenna2", "usv6/health_DEBUG/antenna_conditions/antenna3", "usv6/health_DEBUG/sensor_conditions/sensor1", "usv6/health_DEBUG/sensor_conditions/sensor2", "usv6/health_DEBUG/sensor_conditions/sensor3", "usv6/health_DEBUG/battery_level"]
+# Defining data names for each data-producing node.
+uuv_names = ["uuv", "uuv/health_info", "uuv/mission_info", "uuv/mission_info/mission_log", "uuv/mission_info/route", "uuv/mission_info/antennas", "uuv/mission_info/antennas/antenna1", "uuv/mission_info/antennas/antenna2", "uuv/mission_info/antennas/antenna3", "uuv/mission_info/sensors", "uuv/mission_info/sensors/sensor1", "uuv/mission_info/sensors/sensor2", "uuv/mission_info/sensors/sensor3", "uuv/mission_info/location", "uuv/mission_info/depth", "uuv/health_info/log", "uuv/health_info/antenna_conditions/antenna1", "uuv/health_info/antenna_conditions/antenna2", "uuv/health_info/antenna_conditions/antenna3", "uuv/health_info/sensor_conditions/sensor1", "uuv/health_info/sensor_conditions/sensor2", "uuv/health_info/sensor_conditions/sensor3", "uuv/health_info/battery_level"]
+uuv1 = ["uuv1", "uuv1/health_info", "uuv1/mission_info", "uuv1/mission_info/mission_log", "uuv1/mission_info/route", "uuv1/mission_info/antennas", "uuv1/mission_info/antennas/antenna1", "uuv1/mission_info/antennas/antenna2", "uuv1/mission_info/antennas/antenna3", "uuv1/mission_info/sensors", "uuv1/mission_info/sensors/sensor1", "uuv1/mission_info/sensors/sensor2", "uuv1/mission_info/sensors/sensor3", "uuv1/mission_info/location", "uuv1/mission_info/depth", "uuv1/health_info/log", "uuv1/health_info/antenna_conditions/antenna1", "uuv1/health_info/antenna_conditions/antenna2", "uuv1/health_info/antenna_conditions/antenna3", "uuv1/health_info/sensor_conditions/sensor1", "uuv1/health_info/sensor_conditions/sensor2", "uuv1/health_info/sensor_conditions/sensor3", "uuv1/health_info/battery_level"]
+uuv2 = ["uuv2", "uuv2/health_info", "uuv2/mission_info", "uuv2/mission_info/mission_log", "uuv2/mission_info/route", "uuv2/mission_info/antennas", "uuv2/mission_info/antennas/antenna1", "uuv2/mission_info/antennas/antenna2", "uuv2/mission_info/antennas/antenna3", "uuv2/mission_info/sensors", "uuv2/mission_info/sensors/sensor1", "uuv2/mission_info/sensors/sensor2", "uuv2/mission_info/sensors/sensor3", "uuv2/mission_info/location", "uuv2/mission_info/depth", "uuv2/health_info/log", "uuv2/health_info/antenna_conditions/antenna1", "uuv2/health_info/antenna_conditions/antenna2", "uuv2/health_info/antenna_conditions/antenna3", "uuv2/health_info/sensor_conditions/sensor1", "uuv2/health_info/sensor_conditions/sensor2", "uuv2/health_info/sensor_conditions/sensor3", "uuv2/health_info/battery_level"]
+uuv3 = ["uuv3", "uuv3/health_info", "uuv3/mission_info", "uuv3/mission_info/mission_log", "uuv3/mission_info/route", "uuv3/mission_info/antennas", "uuv3/mission_info/antennas/antenna1", "uuv3/mission_info/antennas/antenna2", "uuv3/mission_info/antennas/antenna3", "uuv3/mission_info/sensors", "uuv3/mission_info/sensors/sensor1", "uuv3/mission_info/sensors/sensor2", "uuv3/mission_info/sensors/sensor3", "uuv3/mission_info/location", "uuv3/mission_info/depth", "uuv3/health_info/log", "uuv3/health_info/antenna_conditions/antenna1", "uuv3/health_info/antenna_conditions/antenna2", "uuv3/health_info/antenna_conditions/antenna3", "uuv3/health_info/sensor_conditions/sensor1", "uuv3/health_info/sensor_conditions/sensor2", "uuv3/health_info/sensor_conditions/sensor3", "uuv3/health_info/battery_level"]
+uuv4 = ["uuv4", "uuv4/health_info", "uuv4/mission_info", "uuv4/mission_info/mission_log", "uuv4/mission_info/route", "uuv4/mission_info/antennas", "uuv4/mission_info/antennas/antenna1", "uuv4/mission_info/antennas/antenna2", "uuv4/mission_info/antennas/antenna3", "uuv4/mission_info/sensors", "uuv4/mission_info/sensors/sensor1", "uuv4/mission_info/sensors/sensor2", "uuv4/mission_info/sensors/sensor3", "uuv4/mission_info/location", "uuv4/mission_info/depth", "uuv4/health_info/log", "uuv4/health_info/antenna_conditions/antenna1", "uuv4/health_info/antenna_conditions/antenna2", "uuv4/health_info/antenna_conditions/antenna3", "uuv4/health_info/sensor_conditions/sensor1", "uuv4/health_info/sensor_conditions/sensor2", "uuv4/health_info/sensor_conditions/sensor3", "uuv4/health_info/battery_level"]
+uuv5 = ["uuv5", "uuv5/health_info", "uuv5/mission_info", "uuv5/mission_info/mission_log", "uuv5/mission_info/route", "uuv5/mission_info/antennas", "uuv5/mission_info/antennas/antenna1", "uuv5/mission_info/antennas/antenna2", "uuv5/mission_info/antennas/antenna3", "uuv5/mission_info/sensors", "uuv5/mission_info/sensors/sensor1", "uuv5/mission_info/sensors/sensor2", "uuv5/mission_info/sensors/sensor3", "uuv5/mission_info/location", "uuv5/mission_info/depth", "uuv5/health_info/log", "uuv5/health_info/antenna_conditions/antenna1", "uuv5/health_info/antenna_conditions/antenna2", "uuv5/health_info/antenna_conditions/antenna3", "uuv5/health_info/sensor_conditions/sensor1", "uuv5/health_info/sensor_conditions/sensor2", "uuv5/health_info/sensor_conditions/sensor3", "uuv5/health_info/battery_level"]
+uuv6 = ["uuv6", "uuv6/health_info", "uuv6/mission_info", "uuv6/mission_info/mission_log", "uuv6/mission_info/route", "uuv6/mission_info/antennas", "uuv6/mission_info/antennas/antenna1", "uuv6/mission_info/antennas/antenna2", "uuv6/mission_info/antennas/antenna3", "uuv6/mission_info/sensors", "uuv6/mission_info/sensors/sensor1", "uuv6/mission_info/sensors/sensor2", "uuv6/mission_info/sensors/sensor3", "uuv6/mission_info/location", "uuv6/mission_info/depth", "uuv6/health_info/log", "uuv6/health_info/antenna_conditions/antenna1", "uuv6/health_info/antenna_conditions/antenna2", "uuv6/health_info/antenna_conditions/antenna3", "uuv6/health_info/sensor_conditions/sensor1", "uuv6/health_info/sensor_conditions/sensor2", "uuv6/health_info/sensor_conditions/sensor3", "uuv6/health_info/battery_level"]
+uuv7 = ["uuv7", "uuv7/health_info", "uuv7/mission_info", "uuv7/mission_info/mission_log", "uuv7/mission_info/route", "uuv7/mission_info/antennas", "uuv7/mission_info/antennas/antenna1", "uuv7/mission_info/antennas/antenna2", "uuv7/mission_info/antennas/antenna3", "uuv7/mission_info/sensors", "uuv7/mission_info/sensors/sensor1", "uuv7/mission_info/sensors/sensor2", "uuv7/mission_info/sensors/sensor3", "uuv7/mission_info/location", "uuv7/mission_info/depth", "uuv7/health_info/log", "uuv7/health_info/antenna_conditions/antenna1", "uuv7/health_info/antenna_conditions/antenna2", "uuv7/health_info/antenna_conditions/antenna3", "uuv7/health_info/sensor_conditions/sensor1", "uuv7/health_info/sensor_conditions/sensor2", "uuv7/health_info/sensor_conditions/sensor3", "uuv7/health_info/battery_level"]
+uuv8 = ["uuv8", "uuv8/health_info", "uuv8/mission_info", "uuv8/mission_info/mission_log", "uuv8/mission_info/route", "uuv8/mission_info/antennas", "uuv8/mission_info/antennas/antenna1", "uuv8/mission_info/antennas/antenna2", "uuv8/mission_info/antennas/antenna3", "uuv8/mission_info/sensors", "uuv8/mission_info/sensors/sensor1", "uuv8/mission_info/sensors/sensor2", "uuv8/mission_info/sensors/sensor3", "uuv8/mission_info/location", "uuv8/mission_info/depth", "uuv8/health_info/log", "uuv8/health_info/antenna_conditions/antenna1", "uuv8/health_info/antenna_conditions/antenna2", "uuv8/health_info/antenna_conditions/antenna3", "uuv8/health_info/sensor_conditions/sensor1", "uuv8/health_info/sensor_conditions/sensor2", "uuv8/health_info/sensor_conditions/sensor3", "uuv8/health_info/battery_level"]
+usv_names = ["usv", "usv/health_info", "usv/mission_info", "usv/mission_info/mission_log", "usv/mission_info/route", "usv/mission_info/antennas", "usv/mission_info/antennas/antenna1", "usv/mission_info/antennas/antenna2", "usv/mission_info/antennas/antenna3", "usv/mission_info/sensors", "usv/mission_info/sensors/sensor1", "usv/mission_info/sensors/sensor2", "usv/mission_info/sensors/sensor3", "usv/mission_info/location", "usv/health_info/log", "usv/health_info/antenna_conditions/antenna1", "usv/health_info/antenna_conditions/antenna2", "usv/health_info/antenna_conditions/antenna3", "usv/health_info/sensor_conditions/sensor1", "usv/health_info/sensor_conditions/sensor2", "usv/health_info/sensor_conditions/sensor3", "usv/health_info/battery_level"]
+usv1 = ["usv1", "usv1/health_info", "usv1/mission_info", "usv1/mission_info/mission_log", "usv1/mission_info/route", "usv1/mission_info/antennas", "usv1/mission_info/antennas/antenna1", "usv1/mission_info/antennas/antenna2", "usv1/mission_info/antennas/antenna3", "usv1/mission_info/sensors", "usv1/mission_info/sensors/sensor1", "usv1/mission_info/sensors/sensor2", "usv1/mission_info/sensors/sensor3", "usv1/mission_info/location", "usv1/health_info/log", "usv1/health_info/antenna_conditions/antenna1", "usv1/health_info/antenna_conditions/antenna2", "usv1/health_info/antenna_conditions/antenna3", "usv1/health_info/sensor_conditions/sensor1", "usv1/health_info/sensor_conditions/sensor2", "usv1/health_info/sensor_conditions/sensor3", "usv1/health_info/battery_level"]
+usv2 = ["usv2", "usv2/health_info", "usv2/mission_info", "usv2/mission_info/mission_log", "usv2/mission_info/route", "usv2/mission_info/antennas", "usv2/mission_info/antennas/antenna1", "usv2/mission_info/antennas/antenna2", "usv2/mission_info/antennas/antenna3", "usv2/mission_info/sensors", "usv2/mission_info/sensors/sensor1", "usv2/mission_info/sensors/sensor2", "usv2/mission_info/sensors/sensor3", "usv2/mission_info/location", "usv2/health_info/log", "usv2/health_info/antenna_conditions/antenna1", "usv2/health_info/antenna_conditions/antenna2", "usv2/health_info/antenna_conditions/antenna3", "usv2/health_info/sensor_conditions/sensor1", "usv2/health_info/sensor_conditions/sensor2", "usv2/health_info/sensor_conditions/sensor3", "usv2/health_info/battery_level"]
+usv3 = ["usv3", "usv3/health_info", "usv3/mission_info", "usv3/mission_info/mission_log", "usv3/mission_info/route", "usv3/mission_info/antennas", "usv3/mission_info/antennas/antenna1", "usv3/mission_info/antennas/antenna2", "usv3/mission_info/antennas/antenna3", "usv3/mission_info/sensors", "usv3/mission_info/sensors/sensor1", "usv3/mission_info/sensors/sensor2", "usv3/mission_info/sensors/sensor3", "usv3/mission_info/location", "usv3/health_info/log", "usv3/health_info/antenna_conditions/antenna1", "usv3/health_info/antenna_conditions/antenna2", "usv3/health_info/antenna_conditions/antenna3", "usv3/health_info/sensor_conditions/sensor1", "usv3/health_info/sensor_conditions/sensor2", "usv3/health_info/sensor_conditions/sensor3", "usv3/health_info/battery_level"]
+usv4 = ["usv4", "usv4/health_info", "usv4/mission_info", "usv4/mission_info/mission_log", "usv4/mission_info/route", "usv4/mission_info/antennas", "usv4/mission_info/antennas/antenna1", "usv4/mission_info/antennas/antenna2", "usv4/mission_info/antennas/antenna3", "usv4/mission_info/sensors", "usv4/mission_info/sensors/sensor1", "usv4/mission_info/sensors/sensor2", "usv4/mission_info/sensors/sensor3", "usv4/mission_info/location", "usv4/health_info/log", "usv4/health_info/antenna_conditions/antenna1", "usv4/health_info/antenna_conditions/antenna2", "usv4/health_info/antenna_conditions/antenna3", "usv4/health_info/sensor_conditions/sensor1", "usv4/health_info/sensor_conditions/sensor2", "usv4/health_info/sensor_conditions/sensor3", "usv4/health_info/battery_level"]
+usv5 = ["usv5", "usv5/health_info", "usv5/mission_info", "usv5/mission_info/mission_log", "usv5/mission_info/route", "usv5/mission_info/antennas", "usv5/mission_info/antennas/antenna1", "usv5/mission_info/antennas/antenna2", "usv5/mission_info/antennas/antenna3", "usv5/mission_info/sensors", "usv5/mission_info/sensors/sensor1", "usv5/mission_info/sensors/sensor2", "usv5/mission_info/sensors/sensor3", "usv5/mission_info/location", "usv5/health_info/log", "usv5/health_info/antenna_conditions/antenna1", "usv5/health_info/antenna_conditions/antenna2", "usv5/health_info/antenna_conditions/antenna3", "usv5/health_info/sensor_conditions/sensor1", "usv5/health_info/sensor_conditions/sensor2", "usv5/health_info/sensor_conditions/sensor3", "usv5/health_info/battery_level"]
+usv6 = ["usv6", "usv6/health_info", "usv6/mission_info", "usv6/mission_info/mission_log", "usv6/mission_info/route", "usv6/mission_info/antennas", "usv6/mission_info/antennas/antenna1", "usv6/mission_info/antennas/antenna2", "usv6/mission_info/antennas/antenna3", "usv6/mission_info/sensors", "usv6/mission_info/sensors/sensor1", "usv6/mission_info/sensors/sensor2", "usv6/mission_info/sensors/sensor3", "usv6/mission_info/location", "usv6/health_info/log", "usv6/health_info/antenna_conditions/antenna1", "usv6/health_info/antenna_conditions/antenna2", "usv6/health_info/antenna_conditions/antenna3", "usv6/health_info/sensor_conditions/sensor1", "usv6/health_info/sensor_conditions/sensor2", "usv6/health_info/sensor_conditions/sensor3", "usv6/health_info/battery_level"]
 
-#2D list with a list of name lists ordered by node id
+# 2D list with a list of name lists ordered by node id.
 node_names = []
 node_names.append(usv1)
 node_names.append(uuv1)
@@ -610,31 +592,18 @@ node_names.append(uuv8)
 node_names.append(usv5)
 node_names.append(usv6)
 
-# hit_distances list keeps track of how many nodes each interest must 
-# pass through before a node has the data being requested
-# hit_distances indexes match interest ids, each time an interest is 
-# created 0 is appended to hit_distances
-# each time a node receives a request it adds one to the hit_distances 
-# list where the index equals the interest id
+# hit_distances and return_times are ordered by corresponding interest id.
 hit_distances = []
 return_times = []
 
-# cache status keeps track of the number of current caches of each data 
-# name across the network
+# Keeps track of the number of current caches of each data name.
 cache_status = {}
 for r in range(0, len(node_names)):
     for n in node_names[r]:
         cache_status[n] = 0
 
-# hits and times list are used for the graph of cache hits
-# every time a node is able to satisfy a request with data from its 
-# content store it appends 1 to the hits list and the current 
-# environment time to the times list
-hits = []
-times = []
-
-#creating an list of content for the forwarding interest base of each node, ordered by node id
-#each node has a dictionary for the content of its forwarding interest base, the keys are data names and the values are the channel indexes to forward requests to
+# Creating an list of content for the forwarding interest base of each node.
+# Content is a dictionary with data names as keys and channel ids as values.
 content = []
 
 content1 = {}
@@ -768,60 +737,64 @@ for r in range(0, len(node_names)):
             content14[n] = 16
 content.append(content14)
 
-#getting results from ndnProjectNetwork file, which are in the form of a dictionary
+# Getting results from network file, which are a dictionary.
 results = network.graph_configuration()
 H = results["graph"]
-# ndnProjectNetwork sends a 2D list of edge channels with each item 
-# having the structure of [channel id, node channel is connected to, 
-# channel length]
-# these are not part of the networkx graph since they are only connected 
-# to one node on the edge of the graph
+# network sends a list of edge channels, which are not part of the graph.
 edge_channels = results["edge_channels"]
 
-# past variable keeps track of channel ids as they're being added so 
-# that edge channel ids can be added at the right index in the 
-# channel list
+# Keeps track of ids so edge channels can be added at the right index.
 past = -1
-for e in H.edges:
-    # checking if any edge channels should be added to channels list
-    for r in edge_channels:
-        # if edge channel id is between the past id and the current id, the channel will be added to the channels list using the attributes defined in the edge_channels lists
-        if r["id"] > past and r["id"] < H.edges[e]["id"]:
-            channels.append(Channel(env, r["id"], [-1, r["node"]], r["length"]))
 
-    #channel objects are created and added using the graph edges and their attributes
-    channels.append(Channel(env, H.edges[e]["id"], [e[0], e[1]], H.edges[e]["length"]))
+for e in H.edges:
+    # Checking if any edge channels should be added to channels list.
+    for r in edge_channels:
+        # Add if edge channel id is between past and the current id.
+        if r["id"] > past and r["id"] < H.edges[e]["id"]:
+            # One of the ids for an edge channel's nodes is -1.
+            channels.append(Channel(env, r["id"], [-1, r["node"]], 
+                                    r["length"]))
+
+    # Channel objects are created using attributes of graph edges.
+    channels.append(Channel(env, H.edges[e]["id"], [e[0], e[1]], 
+                            H.edges[e]["length"]))
 
     past = H.edges[e]["id"]
 
 for n in H.nodes:
-    #keeps track of channel ids connected to the node, reset each time
+    # Keeps track of channel ids connected to the node, reset each time.
     c_ids = []
 
-    #checking graph edges for connected channels
+    # Check graph edges for connected channels.
     for e in H.edges(n):
         c_ids.append(H.edges[e]["id"])
 
-    #checking edge channels
+    # Check if node is connected to an edge channel.
     for r in edge_channels:
         if r["node"] == n:
             c_ids.append(r["id"])
             
-    #creating the node object and adding
-    nodes.append(Node(env, n, node_names[n][0], c_ids, CACHE_SIZE, 5, content[n], []))
+    # Pre-fill CS.
+    cscontent = []
+    for i in range(0, CACHE_SIZE):
+        rand = random.randint(0, len(node_names) - 1)
+        cscontent.append(Data(env, node_names[rand][
+            random.randint(0, len(node_names[rand]) - 1)]))
 
-#creating the queue of environment processes
-#interest_arrival generates interests
+    # Create the node object and add to nodes.
+    nodes.append(Node(env, n, node_names[n][0], c_ids, CACHE_SIZE, 5, 
+                      content[n], cscontent))
+
+# Create the queue of environment processes.
 env.process(interest_arrival())
 
-#for each channel conncted to a node object a function is called to search for new entries in the channel's data and interest stores
-#channel order in each node is changed each time around
+# Search interest and data stores of each channel connected to a node.
 for n in nodes:
     for i in range(0, len(n.channel_ids)):
         env.process(n.search_interests(n.channel_ids[i]))
         env.process(n.search_data(n.channel_ids[i]))
 
-#these lists keep track of where the data for each run starts
+# These lists keep track of where the data for each run/sample starts.
 hd_indexes = []
 rt_indexes = []
 
@@ -829,17 +802,23 @@ for i in range(0, SAMPLES):
     hd_indexes.append(len(hit_distances) - 1)
     rt_indexes.append(len(rt_indexes) - 1)
 
-    env.run(until=env.now + RUN_TIME)
-
+    env.run(until = env.now + RUN_TIME)
+    
+    # Reset CS.
     for n in nodes:
-        n.content_store.content = []
+        cscontent = []
+        for i in range(0, CACHE_SIZE):
+            rand = random.randint(0, len(node_names) - 1)
+            cscontent.append(Data(env, node_names[rand][random.randint(
+                0, len(node_names[rand]) - 1)]))
 
+        n.content_store.content = cscontent
+    
+    # Reset cache_status.
     for c in cache_status:
         cache_status[c] = 0
 
-#calculating the average cache hit ratio
-#total calculates the total number of cache hits
-#length counts the total number of requests the nodes have received
+# Calculate the average cache-hit ratio (cache_hits/total_requests).
 total = 0
 length = 0
 for n in nodes:
@@ -849,55 +828,75 @@ for n in nodes:
 
 logging.info("Average cache hit ratio: %s", total/length)
 
-#log the average hit distance
+# Log the average hit distance and variance.
 logging.info("Average hit distance: %s", statistics.mean(hit_distances))
-logging.info("Hit distance variance across all interests: %s", statistics.variance(hit_distances))
+logging.info("Hit distance variance across all interests: %s", 
+             statistics.variance(hit_distances))
 
-#log the average return time
+# Log the average return time and variance.
 logging.info("Average return time: %s", statistics.mean(return_times))
-logging.info("Return time variance across all interests: %s", statistics.variance(return_times))
+logging.info("Return time variance across all interests: %s", 
+             statistics.variance(return_times))
 
-logging.info("Percent 1: %s", 100*hit_distances.count(1)/len(hit_distances))
-logging.info("Percent 2: %s", 100*hit_distances.count(2)/len(hit_distances))
-logging.info("Percent 3: %s", 100*hit_distances.count(3)/len(hit_distances))
-logging.info("Percent 4: %s", 100*hit_distances.count(4)/len(hit_distances))
-logging.info("Percent 5: %s", 100*hit_distances.count(5)/len(hit_distances))
+logging.info("Percent 1: %s", 100 * hit_distances.count(1)/len(hit_distances))
+logging.info("Percent 2: %s", 100 * hit_distances.count(2)/len(hit_distances))
+logging.info("Percent 3: %s", 100 * hit_distances.count(3)/len(hit_distances))
+logging.info("Percent 4: %s", 100 * hit_distances.count(4)/len(hit_distances))
+logging.info("Percent 5: %s", 100 * hit_distances.count(5)/len(hit_distances))
 
 
+# Find the average hit distance for each sample.
 hd_averages = []
 for i in range(0, len(hd_indexes) - 1):
-    hd_averages.append(statistics.mean(hit_distances[hd_indexes[i]+1:hd_indexes[i+1]+1]))
+    hd_averages.append(statistics.mean(hit_distances[
+        hd_indexes[i] + 1:hd_indexes[i+1]+1]))
 
-hd_averages.append(statistics.mean(hit_distances[hd_indexes[len(hd_indexes)-1]+1:]))
-logging.info("Hit distance variance across average hit distance of samples: %s", statistics.variance(hd_averages))
+# Add last sample.
+hd_averages.append(statistics.mean(hit_distances[
+    hd_indexes[len(hd_indexes)-1]+1:]))
+
+# Log variance.
+logging.info("Hit distance variance across average hit distance of samples: %s", 
+             statistics.variance(hd_averages))
 
 
+# Find the average return time for each sample.
 rt_averages = []
 for i in range(0, len(rt_indexes) - 1):
-    rt_averages.append(statistics.mean(return_times[rt_indexes[i]+1:rt_indexes[i+1]+1]))
+    rt_averages.append(statistics.mean(return_times[
+        rt_indexes[i]+1:rt_indexes[i+1]+1]))
 
-rt_averages.append(statistics.mean(return_times[rt_indexes[len(rt_indexes)-1]+1:]))
-logging.info("Return time variance across average return time of samples: %s", statistics.variance(rt_averages))
+# Add last sample.
+rt_averages.append(statistics.mean(return_times[rt_indexes[
+    len(rt_indexes)-1]+1:]))
+
+#Log variance.
+logging.info("Return time variance across average return time of samples: %s", 
+             statistics.variance(rt_averages))
 
 
+# Plot hit distance across samples.
 seaborn.histplot(hd_averages)
 plt.xlabel("Average Hit Distance in a Run")
 plt.ylabel("Frequency")
 mean = statistics.mean(hit_distances)
-plt.title("Hit Distances Histogram With " + str(PROB) + " Probability of Caching: Mean = " + str(round(mean, 4)))
+plt.title("Hit Distances Histogram With " + str(PROB) 
+          + " Probability of Caching: Mean = " + str(round(mean, 4)))
 plt.show()
 
 
+# Plot return times across samples.
 seaborn.histplot(rt_averages)
 plt.xlabel("Average Return Time in a Run")
 plt.ylabel("Frequency")
 mean = statistics.mean(return_times)
-plt.title("Return Times Histogram With " + str(PROB) + " Probability of Caching: Mean = " + str(round(mean, 4)))
+plt.title("Return Times Histogram With " + str(PROB) 
+          + " Probability of Caching: Mean = " + str(round(mean, 4)))
 plt.show()
 
 
-#make the graph
-center_node = nodes[9]
+# Graph network.
+center_node = nodes[13]
 edge_nodes = set(H) - {center_node}
 pos = nx.circular_layout(H.subgraph(edge_nodes))
 pos[center_node] = numpy.array([0, 0])
@@ -905,9 +904,21 @@ nx.draw(H)
 plt.draw()
 plt.show()
 
-
-#make the cache hits timeline graph
-plt.scatter(times, hits)
-plt.ylabel = "Cache Hits"
-plt.xlabel = "Event Time"
-plt.show()
+with open("data.csv", "w", newline = '') as csvfile:
+    field_names = ["Date", "Probability", "Sample Size", "Run Time", 
+                   "Average Hit Distance", "HD Variance Across Interests", 
+                   "HD Variance Across Samples", "HD Sample Averages", 
+                   "Average Return Time", "RT Variance Across Interests",
+                   "RT Variance Across Samples", "RT Sample Averages"]
+    dwriter = csv.DictWriter(csvfile, fieldnames=field_names)
+    dwriter.writeheader()
+    dwriter.writerow({"Date": datetime.datetime.now, "Probability": PROB, 
+                     "Sample Size": SAMPLES, "Run Time": RUN_TIME, 
+                     "Average Hit Distance": statistics.mean(hit_distances), 
+                     "HD Variance Across Interests": statistics.variance(hit_distances), 
+                     "HD Variance Across Samples": statistics.variance(hd_averages), 
+                     "HD Sample Averages": hd_averages,
+                     "Average Return Time": statistics.mean(return_times),
+                     "RT Variance Across Interests": statistics.variance(return_times),
+                     "RT Variance Across Samples": statistics.variance(rt_averages),
+                     "RT Sample Averages": rt_averages})

@@ -1,7 +1,7 @@
 import networkx as nx
 from numpy import random
 
-def graph_configuration():
+def graph_configuration() -> dict[str, nx.Graph, list[dict[str, int]]]:
     """Sets up networkx graph and some node/channel attributes."""
 
     G = nx.Graph()
@@ -33,7 +33,7 @@ def graph_configuration():
     edge_channels.append({"id": 4, "node": 3})
     edge_channels.append({"id": 8, "node": 6})
     edge_channels.append({"id": 12, "node": 9})
-    
+
     for x in edge_channels:
         x["length"] = random.randint(500, 2000)
 

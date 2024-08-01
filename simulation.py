@@ -38,6 +38,46 @@ SAMPLES = 10000
 RUN_TIME = 1000
 
 
+class Interest(object):
+    """Represents an interest package and its attributes.
+    
+    Arguments:
+    env -- Simpy env in which the simulation takes place
+    id -- int, the id the interest is assigned to
+    name -- String, name of data interest is requesting"""
+
+    def __init__(self, env: simpy.Environment, id: int, name: str):
+        self.env = env
+        self.id = id
+        self.data_name = name
+        self.creation_time = self.env.now
+        # Currently all interest packets are the same size.
+        self.size = 1000
+
+
+class Data(object):
+    """Represents a data package and its attributes.
+    
+    Arguments:
+    env -- Simpy env in which the simulation takes place
+    id -- int, the id the data is assigned to
+    name -- String, name of data being packaged"""
+
+    def __init__(self, env: simpy.Environment, name: str):
+        self.env = env
+        self.name = name
+        # Size of data is variable.
+        self.size = 2000 + random.uniform(-200, 200)
+
+        self.send_time = self.env.now
+        # The time the data expires is determined based on importance.
+        if "health_info" in self.name:
+            self.expire_time = self.send_time + HI_EXPIRE_TIME
+
+        else:
+            self.expire_time = self.send_time + MI_EXPIRE_TIME
+
+
 class ContentStore(object):
     """Represents the Content Store (CS) of a node and its functions.
 
@@ -47,14 +87,15 @@ class ContentStore(object):
     content -- list of data packages the CS holds
     node_id -- int, id of the node the CS belongs to"""
 
-    def __init__(self, env, max, content, node_id):
+    def __init__(self, env: simpy.Environment, max: int, content: list[Data], 
+                 node_id: int):
         self.env = env
         # max_size is currently is defined by CACHE_SIZE.
         self.max_size = max
         self.content = content
         self.node_id = node_id
 
-    def search(self, interest):
+    def search(self, interest: Interest) -> bool:
         """Checks if the CS already contains the requested data. 
     
         Arguments:
@@ -65,15 +106,17 @@ class ContentStore(object):
         # CS searches for data name, which also must not be expired.
         for d in self.content:
             if interest.data_name == d.name and d.expire_time > self.env.now:
-                logging.debug("Data: %s found in Content Store", interest.data_name)
+                logging.debug("Data: %s found in Content Store", 
+                              interest.data_name)
                 # If found, return True.
                 return True
             
-        logging.debug("Data: %s not found in Content Store", interest.data_name)
+        logging.debug("Data: %s not found in Content Store", 
+                      interest.data_name)
         # If not found, return False.
         return False
     
-    def cache_data(self, data):
+    def cache_data(self, data: Data):
         """Caches/does not cache data using CS management policies.
 
         Arguments:
@@ -109,7 +152,8 @@ class ContentStore(object):
                 min_score_index = 0
                 for d in self.content:
                     if d.name in nodes[self.node_id].data_popularity:
-                        score = nodes[self.node_id].data_popularity[d.name]*(d.expire_time-self.env.now)
+                        score = nodes[self.node_id].data_popularity[
+                            d.name]*(d.expire_time-self.env.now)
 
                     else:
                         score = 0
@@ -128,7 +172,7 @@ class ContentStore(object):
 
         logging.debug("Current state of Content Store: %s", self.content)
 
-    def send_data(self, channel_id, interest):
+    def send_data(self, channel_id: int, interest: Interest):
         """Creates Data object and sends it to the specified channel.
         
         Arguments:
@@ -139,7 +183,8 @@ class ContentStore(object):
         data = Data(self.env, interest.data_name)
         logging.debug("Responding with data: %s to channel %s", 
                      interest.data_name, channel_id)
-        yield self.env.process(channels[channel_id].forward_data(data, interest, self.node_id))
+        yield self.env.process(channels[channel_id].forward_data(
+            data, interest, self.node_id))
 
 
 class PendingInterest(object):
@@ -147,18 +192,15 @@ class PendingInterest(object):
     and its functions.
 
     Arguments:
-    env -- Simpy env in which the simulation takes place
-    max -- int which specifies the max size of the PIT"""
+    env -- Simpy env in which the simulation takes place"""
 
-    def __init__(self, env, max):
+    def __init__(self, env: simpy.Environment):
         self.env = env
-        # max_size isn't currently being used for size management
-        self.max_size = max
         # Dictionary with data names as keys and dictionaries as values.
         # The values are interest objects corresponding with channel ids.
         self.content = {}
 
-    def search(self, interest):
+    def search(self, interest: Interest) -> bool:
         """Checks if the data name requested by the interest is already 
         in the PIT.
         
@@ -169,15 +211,17 @@ class PendingInterest(object):
 
         # Check if the node has already forwarded a request for the data.
         if interest.data_name in self.content:
-            logging.debug("Data: %s found in Pending Interest Table", interest.data_name)
+            logging.debug("Data: %s found in Pending Interest Table", 
+                          interest.data_name)
             # Return True if found.
             return True
         
-        logging.debug("Data: %s not found in Pending Interest Table", interest.data_name)
+        logging.debug("Data: %s not found in Pending Interest Table", 
+                      interest.data_name)
         # Otherwise, return False.
         return False
     
-    def add_name(self, interest, fromId):
+    def add_name(self, interest: Interest, fromId: int):
         """Adds new request to the content of the PIT.
         
         Arguments:
@@ -185,9 +229,10 @@ class PendingInterest(object):
         fromId -- int, id for the channel the interest came through"""
 
         self.content[interest.data_name] = {interest: fromId}
-        logging.debug("Data: %s added to Pending Interest Table", interest.data_name)
+        logging.debug("Data: %s added to Pending Interest Table", 
+                      interest.data_name)
 
-    def add_interface(self, interest, fromId):
+    def add_interface(self, interest: Interest, fromId: int):
         """Adds Interest object and channel id to an already-existing 
         entry for the data name.
 
@@ -199,7 +244,7 @@ class PendingInterest(object):
         logging.debug("Interface: %s added to %s in Pending Interest Table", 
                      fromId, interest.data_name)
         
-    def remove(self, data_name):
+    def remove(self, data_name: str):
         """Removes entry in PIT; called when the node receives the data.
         
         Arguments:
@@ -218,13 +263,14 @@ class ForwardingBase(object):
     interfaces -- dictionary matching data names to channel ids
     node_id -- int, id of the node the FIB belongs to"""
 
-    def __init__(self, env, interfaces, node_id):
+    def __init__(self, env: simpy.Environment, interfaces: dict[str, int], 
+                 node_id: int):
         self.env = env
         # Dictionary with data names corresponding to channel ids.
         self.content = interfaces
         self.node_id = node_id
 
-    def send_request(self, interest):
+    def send_request(self, interest: Interest):
         """Sends Interest object to a channel based on the FIB's content.
         
         Arguments:
@@ -247,13 +293,13 @@ class Channel(object):
     nodes -- list containing the ids of the nodes the channel connects
     length -- int representing the length of the channel in meters"""
 
-    def __init__(self, env, id, nodes, length):
+    def __init__(self, env: simpy.Environment, id: int, nodes: list[int], length: int):
         self.env = env
         self.id = id
         self.nodes = nodes
         self.length = length
     
-    def forward_interest(self, interest, node_id):
+    def forward_interest(self, interest: Interest, node_id: int):
         """Puts the interest object in the store of the receiving node.
         
         Arguments:
@@ -282,7 +328,7 @@ class Channel(object):
         # Put the interest in the channel's store in the node.
         nodes[rnode_id].stores[self.id].put(interest)
 
-    def forward_data(self, data, interest, node_id):
+    def forward_data(self, data: Data, interest: Interest, node_id: int):
         """Puts data object in the store of receiving node.
         
         Arguments:
@@ -321,46 +367,6 @@ class Channel(object):
             nodes[rnode_id].data_stores[self.id].put(data)
 
 
-class Interest(object):
-    """Represents an interest package and its attributes.
-    
-    Arguments:
-    env -- Simpy env in which the simulation takes place
-    id -- int, the id the interest is assigned to
-    name -- String, name of data interest is requesting"""
-
-    def __init__(self, env, id, name):
-        self.env = env
-        self.id = id
-        self.data_name = name
-        self.creation_time = self.env.now
-        # Currently all interest packets are the same size.
-        self.size = 1000
-
-
-class Data(object):
-    """Represents a data package and its attributes.
-    
-    Arguments:
-    env -- Simpy env in which the simulation takes place
-    id -- int, the id the data is assigned to
-    name -- String, name of data being packaged"""
-
-    def __init__(self, env, name):
-        self.env = env
-        self.name = name
-        # Size of data is variable.
-        self.size = 2000 + random.uniform(-200, 200)
-
-        self.send_time = self.env.now
-        # The time the data expires is determined based on importance.
-        if "health_info" in self.name:
-            self.expire_time = self.send_time + HI_EXPIRE_TIME
-
-        else:
-            self.expire_time = self.send_time + MI_EXPIRE_TIME
-
-
 class Node(object):
     """Represents a node in a network and its processes.
     
@@ -374,8 +380,8 @@ class Node(object):
     fbdata -- list, the content of the FIB
     cscontent -- list, the starting content of the CS"""
 
-    def __init__(self, env, id, name, channel_ids, cssize, pisize, 
-                 fbdata, cscontent):
+    def __init__(self, env: simpy.Environment, id: int, name: str, channel_ids: list[int], cssize: int, 
+                 fbdata: dict[str, int], cscontent: list[Data]):
         self.env = env
         self.id = id
         self.name = name
@@ -393,7 +399,7 @@ class Node(object):
 
         # Creating instances of the three main parts of each node.
         self.content_store = ContentStore(self.env, cssize, cscontent, self.id)
-        self.pending_interest = PendingInterest(self.env, pisize)
+        self.pending_interest = PendingInterest(self.env)
         self.forwarding_base = ForwardingBase(self.env, fbdata, self.id)
 
         # Dictionary which has data corresponding with times requested.
@@ -404,7 +410,7 @@ class Node(object):
         # Keeps track of how many total interests pass through the node.
         self.total_requests = 0
 
-    def search_interests(self, storeNum):
+    def search_interests(self, storeNum: int):
         """Gets an interest from specified request store, will break if 
         store is empty.
         
@@ -417,7 +423,7 @@ class Node(object):
             # If the function continues, the node receives the request.
             yield self.env.process(self.receive_request(intrst, storeNum))
 
-    def search_data(self, storeNum):
+    def search_data(self, storeNum: int):
         """Gets a data package from specified data store, will break if 
         store is empty.
         
@@ -435,12 +441,12 @@ class Node(object):
             # If the function continues, the node receives the data.
             yield self.env.process(self.receive_data(data))
 
-    def receive_request(self, interest, fromchannel_id):
+    def receive_request(self, interest: Interest, from_channel_id: int):
         """Processes an interest found while searching stores.
         
         Arguments:
         interest -- Interest object representing request
-        fromchannel_id -- id of channel interest came from"""
+        from_channel_id -- id of channel interest came from"""
 
         logging.debug("Node %s receiving request for %s", self.id, interest.data_name)
         # total_hits goes up by one when receiving an interest.
@@ -460,8 +466,8 @@ class Node(object):
             logging.debug("%s receiving request for %s", self.name, interest.data_name)
             data = Data(self.env, interest.data_name)
             logging.debug("Responding with data: %s to channel %s", 
-                         interest.data_name, fromchannel_id)
-            yield self.env.process(channels[fromchannel_id].forward_data(data, interest, 
+                         interest.data_name, from_channel_id)
+            yield self.env.process(channels[from_channel_id].forward_data(data, interest, 
                                                                        self.id))
             
         # below checks if the requested data is in the node's CS, if so, it 
@@ -470,22 +476,22 @@ class Node(object):
             logging.debug("Going to respond with data...")
             # cache hits goes up by one
             self.cache_hits += 1
-            yield self.env.process(self.content_store.send_data(fromchannel_id, 
+            yield self.env.process(self.content_store.send_data(from_channel_id, 
                                                                      interest))
             
         # if the node has already sent a request for this data (meaning it is 
         # already in the PIT), it will add the interface the interest came from 
         # to the dictionary entry for the data
         elif self.pending_interest.search(interest):
-            self.pending_interest.add_interface(interest, fromchannel_id)
+            self.pending_interest.add_interface(interest, from_channel_id)
 
         # otherwise, a new entry will be created in the PIT and the FIB will 
         # forward the request
         else:
-            self.pending_interest.add_name(interest, fromchannel_id)
+            self.pending_interest.add_name(interest, from_channel_id)
             yield self.env.process(self.forwarding_base.send_request(interest))
 
-    def receive_data(self, data):
+    def receive_data(self, data: Data):
         """Processes data found while searching data stores.
         
         Arguments:
@@ -782,7 +788,7 @@ for n in H.nodes:
             random.randint(0, len(node_names[rand]) - 1)]))
 
     # Create the node object and add to nodes.
-    nodes.append(Node(env, n, node_names[n][0], c_ids, CACHE_SIZE, 5, 
+    nodes.append(Node(env, n, node_names[n][0], c_ids, CACHE_SIZE, 
                       content[n], cscontent))
 
 # Create the queue of environment processes.
